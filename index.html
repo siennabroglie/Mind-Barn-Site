@@ -1,1 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Star Map</title>
+  <!-- VirtualSky loaded directly from its own GitHub Pages — no jQuery needed -->
+  <script src="https://slowe.github.io/VirtualSky/virtualsky.min.js"></script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
 
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: black;
+    }
+
+    /* LAYER 1: Star map */
+    #starmap {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 1;
+    }
+
+    /* LAYER 2: Overlay — pointer-events:none lets mouse fall through to star map */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 2;
+      pointer-events: none;
+    }
+
+    /* Add your content styles here */
+    #content {
+      position: absolute;
+      top: 10%;
+      left: 5%;
+      color: white;
+      font-family: 'Times New Roman', Times, serif;
+      font-size: 21px;
+      line-height: 1.6;
+      text-shadow: 0 2px 12px rgba(0,0,0,0.9);
+      pointer-events: none;
+    }
+
+    /* Use this class on any child element that needs to be clickable */
+    .clickable {
+      pointer-events: auto;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- LAYER 1: Star map -->
+  <div id="starmap"></div>
+
+  <!-- LAYER 2: Overlay content -->
+  <div id="overlay">
+    <div id="content">
+      <!-- ✏️ Your content here -->
+    </div>
+  </div>
+
+  <script>
+    // Initialize VirtualSky (no jQuery needed)
+    const planetarium = S.virtualsky({
+      id: 'starmap',
+      projection: 'gnomic',
+      latitude: 48.379471,
+      longitude: -114.24657,
+      live: true,
+      scalestars: 2,
+      az: 180,
+      keyboard: false,   // disable built-in keyboard controls
+      mouse: false       // disable built-in mouse drag so we control it ourselves
+    });
+
+    // Cursor-controlled sky scroll
+    let mouseX = window.innerWidth  / 2;
+    let mouseY = window.innerHeight / 2;
+    let az  = 180;
+    let alt = 45;
+
+    document.addEventListener("mousemove", function (e) {
+      mouseX = e.clientX;
+      mouseY = e.clientY;
+    });
+
+    function animate() {
+      const cx = window.innerWidth  / 2;
+      const cy = window.innerHeight / 2;
+
+      const dx = (mouseX - cx) / cx;   // -1 to 1 horizontally
+      const dy = (mouseY - cy) / cy;   // -1 to 1 vertically
+
+      const speed = 0.15;
+
+      az  += dx * speed;
+      alt -= dy * speed;
+
+      az  = (az + 360) % 360;
+      alt = Math.max(10, Math.min(80, alt));
+
+      planetarium.az  = az  * (Math.PI / 180);
+      planetarium.alt = alt * (Math.PI / 180);
+      planetarium.draw();
+
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+  </script>
+
+</body>
+</html>
