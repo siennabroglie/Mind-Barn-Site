@@ -45,13 +45,14 @@
   color: white;
   line-height: .6;
   white-space: pre-wrap;
+  width: 900px;
   max-width: 90%;
-  width: 90%;
   text-align: left;
   z-index: 3;
   pointer-events: none;
   text-shadow: 0 2px 12px rgba(0,0,0,0.9), 0 0 30px rgba(0,0,0,0.6);
 }
+
 
 
     #cursor {
@@ -82,6 +83,8 @@
   </div>
 
   <script>
+
+    const overlay = document.getElementById("overlay");
 
     let planetarium;
 
@@ -152,36 +155,45 @@ DON’T FORGET TO CHECK THE ATTIC.`;
     setTimeout(typeNext, 800);
 
 // SMOOTH SKY DRIFT
-const overlay = document.getElementById('overlay');
+let mouseX = window.innerWidth/2;
+let mouseY = window.innerHeight/2;
 
-let mouseX = window.innerWidth / 2;
-let mouseY = window.innerHeight / 2;
+let az = 180;
+let alt = 45;
 
-overlay.addEventListener('mousemove', (e) => {
+overlay.addEventListener("mousemove", e => {
   mouseX = e.clientX;
   mouseY = e.clientY;
 });
 
 function animate(){
 
-  if(!planetarium) {
+  if(!planetarium){
     requestAnimationFrame(animate);
     return;
   }
 
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
+  const cx = window.innerWidth/2;
+  const cy = window.innerHeight/2;
 
-  const dx = (mouseX - cx) / cx;
+  const dx = (mouseX - cx)/cx;
+  const dy = (mouseY - cy)/cy;
 
-  const speed = 0.05;
+  const speed = 0.2;
 
-  planetarium.az += dx * speed;
+  az += dx * speed;
+  alt -= dy * speed;
+
+  az = (az + 360) % 360;
+  alt = Math.max(10, Math.min(80, alt));
+
+  planetarium.setView({az: az, alt: alt});
 
   requestAnimationFrame(animate);
 }
 
 animate();
+
 
 
 
