@@ -4,8 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Star Map</title>
-  <!-- VirtualSky loaded directly from its own GitHub Pages — no jQuery needed -->
-  <script src="https://slowe.github.io/VirtualSky/virtualsky.min.js"></script>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -16,26 +14,37 @@
       background: black;
     }
 
-    /* LAYER 1: Star map */
+    /* LAYER 1: VirtualSky iframe — fills the whole page */
     #starmap {
       position: absolute;
       top: 0; left: 0;
       width: 100%;
       height: 100%;
+      border: none;
       z-index: 1;
     }
 
-    /* LAYER 2: Overlay — pointer-events:none lets mouse fall through to star map */
-    #overlay {
+    /* LAYER 2: Transparent overlay — captures mouse movement,
+       passes pointer-events through to anything underneath */
+    #mouse-capture {
       position: absolute;
       top: 0; left: 0;
       width: 100%;
       height: 100%;
       z-index: 2;
+      background: transparent;
+    }
+
+    /* LAYER 3: Your content — pointer-events:none so mouse still reaches layer 2 */
+    #overlay {
+      position: absolute;
+      top: 0; left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 3;
       pointer-events: none;
     }
 
-    /* Add your content styles here */
     #content {
       position: absolute;
       top: 10%;
@@ -48,7 +57,7 @@
       pointer-events: none;
     }
 
-    /* Use this class on any child element that needs to be clickable */
+    /* Add class="clickable" to any child element that needs to receive clicks */
     .clickable {
       pointer-events: auto;
       cursor: pointer;
@@ -57,37 +66,35 @@
 </head>
 <body>
 
-  <!-- LAYER 1: Star map -->
-  <div id="starmap"></div>
+  <!-- LAYER 1: VirtualSky via official iframe embed (Kalispell, MT) -->
+  <iframe
+    id="starmap"
+    src="https://slowe.github.io/VirtualSky/embed?projection=gnomic&latitude=48.379471&longitude=-114.24657&live=true&scalestars=2&az=180&mouse=false&keyboard=false&gradient=true&cardinalpoints=true"
+    scrolling="no"
+    allowfullscreen>
+  </iframe>
 
-  <!-- LAYER 2: Overlay content -->
+  <!-- LAYER 2: Captures mouse position to drive sky scroll -->
+  <div id="mouse-capture"></div>
+
+  <!-- LAYER 3: Your overlay content here -->
   <div id="overlay">
     <div id="content">
-      <!-- ✏️ Your content here -->
+      <!-- ✏️ Add your text, images, logos etc. here -->
     </div>
   </div>
 
   <script>
-    // Initialize VirtualSky (no jQuery needed)
-    const planetarium = S.virtualsky({
-      id: 'starmap',
-      projection: 'gnomic',
-      latitude: 48.379471,
-      longitude: -114.24657,
-      live: true,
-      scalestars: 2,
-      az: 180,
-      keyboard: false,   // disable built-in keyboard controls
-      mouse: false       // disable built-in mouse drag so we control it ourselves
-    });
+    const iframe = document.getElementById('starmap');
+    const capture = document.getElementById('mouse-capture');
 
-    // Cursor-controlled sky scroll
     let mouseX = window.innerWidth  / 2;
     let mouseY = window.innerHeight / 2;
+
     let az  = 180;
     let alt = 45;
 
-    document.addEventListener("mousemove", function (e) {
+    capture.addEventListener("mousemove", function (e) {
       mouseX = e.clientX;
       mouseY = e.clientY;
     });
@@ -96,8 +103,8 @@
       const cx = window.innerWidth  / 2;
       const cy = window.innerHeight / 2;
 
-      const dx = (mouseX - cx) / cx;   // -1 to 1 horizontally
-      const dy = (mouseY - cy) / cy;   // -1 to 1 vertically
+      const dx = (mouseX - cx) / cx;   // -1 (left) to 1 (right)
+      const dy = (mouseY - cy) / cy;   // -1 (top)  to 1 (bottom)
 
       const speed = 0.15;
 
@@ -107,9 +114,11 @@
       az  = (az + 360) % 360;
       alt = Math.max(10, Math.min(80, alt));
 
-      planetarium.az  = az  * (Math.PI / 180);
-      planetarium.alt = alt * (Math.PI / 180);
-      planetarium.draw();
+      // Send the updated az/alt into the iframe via postMessage
+      iframe.contentWindow.postMessage({
+        az:  az,
+        alt: alt
+      }, '*');
 
       requestAnimationFrame(animate);
     }
