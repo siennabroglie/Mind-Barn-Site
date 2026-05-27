@@ -565,7 +565,7 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
     console.log('player spawned at', tpCamera.position.toString(), 'groundY:', groundY);
 
     onReady();
-  }, null, () => onReady());
+  }, null, (s, msg, err) => { console.error('Player GLB failed to load:', msg, err); onReady(); });
 
 }, null, (s, msg, err) => console.error('Farm load failed:', msg, err));
 
