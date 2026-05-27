@@ -441,6 +441,7 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
   }
+  console.log('checkpoint 1 - ground mesh:', groundMesh ? 'found' : 'not found');
 
   for (const m of meshes) {
     if (!m.getTotalVertices || m.getTotalVertices() === 0) continue;
@@ -452,14 +453,10 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
       m.edgesWidth = 3.5;
       m.edgesColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
     }
-    // All meshes are solid for the UniversalCamera collision system.
-    // (No pass-through exceptions — stepladder, ladder, barn_second_floor are
-    // now proper walkable surfaces.)
     m.checkCollisions = true;
     m.isPickable      = true;
     if (m.name === 'windmill_blades') windmillBlades = m;
 
-    // Only create Havok colliders if physics was successfully initialised
     if (scene.getPhysicsEngine()) {
       try {
         const shapeType = (
@@ -483,8 +480,8 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
       }
     }
   }
+  console.log('checkpoint 2 - mesh loop done');
 
-  // Smooth ground normals (visual only — does not affect Havok colliders)
   if (groundMesh) {
     const positions = groundMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
     const indices   = groundMesh.getIndices();
@@ -494,14 +491,8 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
       groundMesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, newNormals);
     }
   }
+  console.log('checkpoint 3 - normals done');
 
-  // ── No ground-snap loop ───────────────────────────────────────────────────────
-  // The old system raycasted downward and repositioned each mesh to sit on the
-  // terrain. With Havok, the GLB's built-in transforms are the ground truth —
-  // meshes are placed wherever the 3D artist put them, and Havok builds static
-  // colliders from those positions. Nothing to snap.
-
-  // Fit cameras to scene
   const sceneBB = computeSceneBounds(meshes);
   const ctr = sceneBB.center, sz = sceneBB.size;
   const dim = Math.max(sz.x, sz.y, sz.z);
@@ -510,13 +501,13 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
 
   isoCamera.target = new BABYLON.Vector3(ctr.x, sz.y * 0.3, ctr.z);
   isoCamera.radius = Math.max(sz.x, sz.z) * 1.7 + 400;
-  // Save this as the "home" pose — double-clicking empty space returns here
   _isoOrigPose = {
     target: isoCamera.target.clone(),
     alpha:  isoCamera.alpha,
     beta:   isoCamera.beta,
     radius: isoCamera.radius,
   };
+  console.log('checkpoint 4 - cameras fit, loading player...');
 
   // Load player mesh and spawn tpCamera
   BABYLON.SceneLoader.ImportMesh('', './', 'orange_man_decimated.glb', scene, (pMeshes) => {
