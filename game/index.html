@@ -437,6 +437,7 @@ const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
 BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => {
+  console.log('farm GLB loaded, meshes:', meshes.length);
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
   }
@@ -458,29 +459,28 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
     m.isPickable      = true;
     if (m.name === 'windmill_blades') windmillBlades = m;
 
-    // Havok physics collider — mass:0 = immovable static body.
-    // BOX: flat/ramp surfaces where exact mesh topology would cause gaps or snagging.
-    // MESH: everything else — walls, fences, irregular structures.
-    // Kinematic platforms also get ANIMATED motion type.
-    try {
-      const shapeType = (
-        m.name === 'ground_plane'      ||  // flat terrain — BOX is cheaper and exact
-        m.name === 'barn_second_floor' ||  // slatted floor — BOX ignores plank gaps
-        m.name === 'stepladder'            // ramp stairs — BOX gives smooth incline, MESH exposes individual rungs
-      ) ? BABYLON.PhysicsShapeType.BOX : BABYLON.PhysicsShapeType.MESH;
-      const agg = new BABYLON.PhysicsAggregate(m, shapeType, { mass: 0, friction: 0.5, restitution: 0 }, scene);
-      if (KINEMATIC_PLATFORMS.has(m.name)) {
-        agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
-        excludedCamBodies.add(agg.body);
-        excludedCamMeshes.add(m);   // walkable platforms — don't block camera
+    // Only create Havok colliders if physics was successfully initialised
+    if (scene.getPhysicsEngine()) {
+      try {
+        const shapeType = (
+          m.name === 'ground_plane'      ||
+          m.name === 'barn_second_floor' ||
+          m.name === 'stepladder'
+        ) ? BABYLON.PhysicsShapeType.BOX : BABYLON.PhysicsShapeType.MESH;
+        const agg = new BABYLON.PhysicsAggregate(m, shapeType, { mass: 0, friction: 0.5, restitution: 0 }, scene);
+        if (KINEMATIC_PLATFORMS.has(m.name)) {
+          agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
+          excludedCamBodies.add(agg.body);
+          excludedCamMeshes.add(m);
+        }
+        if (m.name === 'ground_plane') {
+          groundPhysicsBody = agg.body;
+          excludedCamBodies.add(agg.body);
+          excludedCamMeshes.add(m);
+        }
+      } catch (e) {
+        console.warn('PhysicsAggregate skipped for', m.name, e);
       }
-      if (m.name === 'ground_plane') {
-        groundPhysicsBody = agg.body;
-        excludedCamBodies.add(agg.body);
-        excludedCamMeshes.add(m);   // ground — always below camera arm
-      }
-    } catch (e) {
-      console.warn('PhysicsAggregate skipped for', m.name, e);
     }
   }
 
