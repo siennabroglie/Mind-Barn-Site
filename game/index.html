@@ -520,8 +520,10 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
 
   // Load player mesh and spawn tpCamera
   BABYLON.SceneLoader.ImportMesh('', './', 'orange_man_decimated.glb', scene, (pMeshes) => {
+    console.log('player GLB loaded, meshes:', pMeshes.length);
     const realMesh = pMeshes.find(m => m.getTotalVertices && m.getTotalVertices() > 0);
-    if (!realMesh) { onReady(); return; }
+    if (!realMesh) { console.error('no vertices found in player GLB'); onReady(); return; }
+    console.log('realMesh found:', realMesh.name);
 
     // Stand the model upright (it's exported lying on its back)
     realMesh.setParent(null);
@@ -559,7 +561,8 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
     const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
     const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + PLAYER_HEIGHT, spawnZ);
-    tpCamera.rotation.y = Math.PI; // face toward scene center
+    tpCamera.rotation.y = Math.PI;
+    console.log('player spawned at', tpCamera.position.toString(), 'groundY:', groundY);
 
     onReady();
   }, null, () => onReady());
