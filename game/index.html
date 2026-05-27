@@ -134,12 +134,14 @@ scene.ambientColor = new BABYLON.Color3(0, 0, 0);
 scene.collisionsEnabled = true;
 
 // ─── Havok physics ────────────────────────────────────────────────────────────
-// Initialise the WASM engine (loaded via CDN UMD script above), create the
-// Babylon plugin, and enable physics with standard earth gravity.
-// Farm meshes will each get a PhysicsAggregate (mass:0 = static collider).
-const havokInstance = await HavokPhysics();
-const havokPlugin   = new BABYLON.HavokPlugin(true, havokInstance);
-scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
+try {
+  const havokInstance = await HavokPhysics();
+  const havokPlugin   = new BABYLON.HavokPlugin(true, havokInstance);
+  scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
+  console.log('Havok loaded OK');
+} catch(e) {
+  console.error('Havok failed to load:', e);
+}
 
 // ─── Lights — daylight with proper contrast ───────────────────────────────────
 // Three-light setup mimicking real daylight:
