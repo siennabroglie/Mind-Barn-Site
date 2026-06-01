@@ -558,9 +558,9 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const spawnIdealZ = -CAMERA_DISTANCE * 1.4;
     const spawnIdealY =  PLAYER_HEIGHT * 1.5;
     camBody.position = new BABYLON.Vector3(
-      spawnX + (-spawnIdealZ * Math.sin(spawnYaw)),
+      spawnX + (spawnIdealZ * Math.sin(spawnYaw)),
       groundY + PLAYER_HEIGHT + spawnIdealY,
-      spawnZ + (-spawnIdealZ * Math.cos(spawnYaw))
+      spawnZ + (spawnIdealZ * Math.cos(spawnYaw))
     );
 
     onReady();
@@ -778,9 +778,9 @@ engine.runRenderLoop(() => {
     // Compute ideal camera world position from player position + yaw
     const yaw = tpCamera.rotation.y;
     const idealWorld = new BABYLON.Vector3(
-      tpCamera.position.x + (-_camIdealZ * Math.sin(yaw)),
+      tpCamera.position.x + _camIdealZ * Math.sin(yaw),
       tpCamera.position.y + _camIdealY,
-      tpCamera.position.z + (-_camIdealZ * Math.cos(yaw))
+      tpCamera.position.z + _camIdealZ * Math.cos(yaw)
     );
 
     // Move camBody toward ideal position using moveWithCollisions
