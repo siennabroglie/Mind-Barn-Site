@@ -236,6 +236,7 @@ tpCamera.attachControl(canvas, true);
 const viewCamera = new BABYLON.UniversalCamera('viewCam', new BABYLON.Vector3(0, 0, 0), scene);
 viewCamera.minZ = 0.5;
 viewCamera.maxZ = 30000;
+viewCamera.inputs.clear();  // no inputs — position and target set manually each frame
 
 // Camera collision body — invisible sphere that uses moveWithCollisions.
 // It physically cannot pass through any wall the player can't pass through.
@@ -433,7 +434,7 @@ let _camIdealY        = null;   // lerped camera height
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
-BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => {
+BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_eb55eb0a5eaa4d039d9bb556cba04376.glb', scene, (meshes) => {
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
   }
@@ -510,7 +511,7 @@ BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => 
   };
 
   // Load player mesh and spawn tpCamera
-  BABYLON.SceneLoader.ImportMesh('', './', 'orange_man_decimated.glb', scene, (pMeshes) => {
+  BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_d78870260f514a8abe5c8b22bbecb990.glb', scene, (pMeshes) => {
     const realMesh = pMeshes.find(m => m.getTotalVertices && m.getTotalVertices() > 0);
     if (!realMesh) { onReady(); return; }
 
