@@ -770,9 +770,10 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z < bb.maximumWorld.z;
     }
 
-    // Indoor: closer + more overhead. Outdoor: default behind/above.
+    // Indoor: closer horizontally + lower = camera moves IN toward player.
+    // The steep angle comes from Z shrinking much more than Y.
     const targetZ = insideBarn ? CAM_DEFAULT_Z * 0.4 : CAM_DEFAULT_Z;
-    const targetY = insideBarn ? CAM_DEFAULT_Y * 1.6 : CAM_DEFAULT_Y;
+    const targetY = insideBarn ? CAM_DEFAULT_Y * 0.6 : CAM_DEFAULT_Y;
 
     // Compute ideal camera world position from tpCamera + yaw + offsets
     const yaw = tpCamera.rotation.y;
