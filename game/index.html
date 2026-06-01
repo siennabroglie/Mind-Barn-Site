@@ -105,7 +105,7 @@
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 const PLAYER_HEIGHT  = 68;            // 75 reduced 10% — fits barn staircase clearances
 const WALK_SPEED     = 3.9;
-const GRAVITY_PER_FRAME = 2.0;
+const GRAVITY_PER_FRAME = 4.0;
 const TURN_SMOOTH    = 0.2;
 const CAMERA_DISTANCE = 80;
 const CAMERA_HEIGHT  = 90;
@@ -228,24 +228,34 @@ tpCamera.ellipsoid = new BABYLON.Vector3(12, PLAYER_HEIGHT / 2, 12);
 tpCamera.ellipsoidOffset = new BABYLON.Vector3(0, PLAYER_HEIGHT / 2, 0);
 tpCamera.checkCollisions = true;
 tpCamera.applyGravity = true;
+tpCamera.inertia = 0;
 // attachControl called immediately, exactly as in the example
 tpCamera.attachControl(canvas, true);
 
-// viewCamera — NOT parented to tpCamera. Position and target are set manually
-// each frame based on the camBody collision sphere's position.
-const viewCamera = new BABYLON.UniversalCamera('viewCam', new BABYLON.Vector3(0, 0, 0), scene);
+// viewCamera — parented behind/above tpCamera. setTarget called once at init while
+// tpCamera is at origin, which bakes a local "look forward + slightly down" rotation
+// that persists correctly as tpCamera moves and rotates around the farm.
+const viewCamera = new BABYLON.UniversalCamera(
+  'viewCam',
+  new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.5, -CAMERA_DISTANCE * 1.4),
+  scene
+);
+viewCamera.parent = tpCamera;
+viewCamera.setTarget(new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.1, 0));
 viewCamera.minZ = 0.5;
 viewCamera.maxZ = 30000;
-viewCamera.inputs.clear();  // no inputs — position and target set manually each frame
 
-// Camera collision body — invisible sphere that uses moveWithCollisions.
-// It physically cannot pass through any wall the player can't pass through.
-// viewCamera follows it each frame.
+// Camera collision probe — invisible sphere with moveWithCollisions.
+// Each frame it probes from the player toward the ideal camera position.
+// If a wall blocks it, viewCamera.position.z is scaled proportionally.
+// The parented viewCamera stays untouched otherwise.
 const camBody = BABYLON.MeshBuilder.CreateSphere('camBody', { diameter: 2 }, scene);
-camBody.isVisible      = false;
-camBody.isPickable     = false;
+camBody.isVisible       = false;
+camBody.isPickable      = false;
 camBody.checkCollisions = true;
 camBody.ellipsoid       = new BABYLON.Vector3(8, 8, 8);
+const CAM_DEFAULT_Z = -CAMERA_DISTANCE * 1.4;
+const CAM_DEFAULT_Y =  PLAYER_HEIGHT * 1.5;
 
 // ── FreeCameraKeyboardWalkInput ───────────────────────────────────────────────
 // Ported verbatim from the Babylon example. W/↑ forward, S/↓ back,
@@ -426,15 +436,13 @@ pumpkinMat.backFaceCulling = false;
 let windmillBlades    = null;
 let tpMesh            = null;
 let groundMesh        = null;
-let barnMesh          = null;   // barn bounding box used for indoor camera detection
+let barnMesh          = null;
 let groundPhysicsBody = null;
 let isCrouching       = false;
-let _camIdealZ        = null;   // lerped camera distance (null until first TP frame)
-let _camIdealY        = null;   // lerped camera height
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
-BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_eb55eb0a5eaa4d039d9bb556cba04376.glb', scene, (meshes) => {
+BABYLON.SceneLoader.ImportMesh('', './', 'farmAssests1.glb', scene, (meshes) => {
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
   }
@@ -511,7 +519,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
   };
 
   // Load player mesh and spawn tpCamera
-  BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_d78870260f514a8abe5c8b22bbecb990.glb', scene, (pMeshes) => {
+  BABYLON.SceneLoader.ImportMesh('', './', 'orange_man_decimated.glb', scene, (pMeshes) => {
     const realMesh = pMeshes.find(m => m.getTotalVertices && m.getTotalVertices() > 0);
     if (!realMesh) { onReady(); return; }
 
@@ -551,16 +559,13 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
     const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + PLAYER_HEIGHT, spawnZ);
-    tpCamera.rotation.y = Math.PI; // face toward scene center
+    tpCamera.rotation.y = Math.PI;
 
-    // Place camBody at the ideal camera position relative to spawn
-    const spawnYaw = Math.PI;
-    const spawnIdealZ = -CAMERA_DISTANCE * 1.4;
-    const spawnIdealY =  PLAYER_HEIGHT * 1.5;
+    // Place camBody behind the player at the ideal camera world position
     camBody.position = new BABYLON.Vector3(
-      spawnX + (spawnIdealZ * Math.sin(spawnYaw)),
-      groundY + PLAYER_HEIGHT + spawnIdealY,
-      spawnZ + (spawnIdealZ * Math.cos(spawnYaw))
+      spawnX + CAM_DEFAULT_Z * Math.sin(Math.PI),
+      groundY + PLAYER_HEIGHT + CAM_DEFAULT_Y,
+      spawnZ + CAM_DEFAULT_Z * Math.cos(Math.PI)
     );
 
     onReady();
@@ -749,14 +754,13 @@ engine.runRenderLoop(() => {
     if (tDone && rDone) _isoLerp = null;
   }
 
-  // ── Third-person camera: collision body + barn interior ─────────────────────
-  // camBody is an invisible sphere with moveWithCollisions. Each frame it moves
-  // toward the ideal camera world position. If a wall is in the way, Babylon's
-  // collision system slides it along the surface — the camera physically cannot
-  // pass through. viewCamera is positioned at camBody each frame and aimed at
-  // the player's head.
+  // ── Third-person camera collision + barn interior ───────────────────────────
+  // viewCamera stays parented to tpCamera at its default local offset.
+  // camBody probes from player head toward the ideal camera world position
+  // using moveWithCollisions. If a wall blocks it, viewCamera.position.z is
+  // scaled proportionally. The parented setup handles orientation automatically.
   if (mode === 'tp' && tpMesh) {
-    // ── Barn interior detection (XZ bounding box test) ──────────────────────
+    // Barn interior detection
     let insideBarn = false;
     if (barnMesh) {
       const bb = barnMesh.getBoundingInfo().boundingBox;
@@ -766,39 +770,42 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z < bb.maximumWorld.z;
     }
 
-    // Smooth lerp between outdoor and indoor camera offsets
-    const outdoorZ = -CAMERA_DISTANCE * 1.4;   // behind player
-    const outdoorY =  PLAYER_HEIGHT   * 1.5;   // above player
-    const indoorZ  = -CAMERA_DISTANCE * 0.5;   // much closer indoors
-    const indoorY  =  PLAYER_HEIGHT   * 2.5;   // more overhead indoors
-    const transitionRate = 0.05;
-    _camIdealZ = BABYLON.Scalar.Lerp(_camIdealZ ?? outdoorZ, insideBarn ? indoorZ : outdoorZ, transitionRate);
-    _camIdealY = BABYLON.Scalar.Lerp(_camIdealY ?? outdoorY, insideBarn ? indoorY : outdoorY, transitionRate);
+    // Indoor: closer + more overhead. Outdoor: default behind/above.
+    const targetZ = insideBarn ? CAM_DEFAULT_Z * 0.4 : CAM_DEFAULT_Z;
+    const targetY = insideBarn ? CAM_DEFAULT_Y * 1.6 : CAM_DEFAULT_Y;
 
-    // Compute ideal camera world position from player position + yaw
+    // Compute ideal camera world position from tpCamera + yaw + offsets
     const yaw = tpCamera.rotation.y;
     const idealWorld = new BABYLON.Vector3(
-      tpCamera.position.x + _camIdealZ * Math.sin(yaw),
-      tpCamera.position.y + _camIdealY,
-      tpCamera.position.z + _camIdealZ * Math.cos(yaw)
+      tpCamera.position.x + targetZ * Math.sin(yaw),
+      tpCamera.position.y + targetY,
+      tpCamera.position.z + targetZ * Math.cos(yaw)
     );
 
-    // Move camBody toward ideal position using moveWithCollisions
+    // Move camBody toward ideal position — collision slides it along walls
     const displacement = idealWorld.subtract(camBody.position);
     camBody.moveWithCollisions(displacement);
 
-    // Safety spring: if camBody got stuck on geometry and the player walked
-    // away, teleport it back to the ideal position to prevent it being
-    // permanently trapped behind a wall
-    const maxArm = Math.sqrt(_camIdealZ * _camIdealZ + _camIdealY * _camIdealY) * 1.5;
+    // Project camBody onto the player→ideal ray to get a 0..1 ratio
+    const playerHead = tpCamera.position.add(new BABYLON.Vector3(0, PLAYER_HEIGHT * 0.9, 0));
+    const ray = idealWorld.subtract(playerHead);
+    const rayLenSq = BABYLON.Vector3.Dot(ray, ray);
+    let ratio = 1;
+    if (rayLenSq > 0.01) {
+      const toCam = camBody.position.subtract(playerHead);
+      ratio = Math.max(0.15, Math.min(1, BABYLON.Vector3.Dot(toCam, ray) / rayLenSq));
+    }
+
+    // Scale viewCamera local Z by ratio. Lerp for smooth transitions.
+    const pullZ = targetZ * ratio;
+    viewCamera.position.z = BABYLON.Scalar.Lerp(viewCamera.position.z, pullZ, 0.2);
+    viewCamera.position.y = BABYLON.Scalar.Lerp(viewCamera.position.y, targetY, 0.05);
+
+    // Safety: if camBody is way too far from the player, teleport it
+    const maxArm = Math.sqrt(targetZ * targetZ + targetY * targetY) * 2;
     if (BABYLON.Vector3.Distance(camBody.position, tpCamera.position) > maxArm) {
       camBody.position.copyFrom(idealWorld);
     }
-
-    // viewCamera follows the collision body and looks at the player
-    viewCamera.position.copyFrom(camBody.position);
-    const lookTarget = tpCamera.position.add(new BABYLON.Vector3(0, PLAYER_HEIGHT * 0.5, 0));
-    viewCamera.setTarget(lookTarget);
   }
 
   if (windmillBlades) windmillBlades.rotation.z += WIND_SPEED;
