@@ -104,7 +104,7 @@
 <script>
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 const PLAYER_HEIGHT  = 68;            // 75 reduced 10% — fits barn staircase clearances
-const WALK_SPEED     = 3.9;
+const WALK_SPEED     = 4.2;
 const GRAVITY_PER_FRAME = 4.0;
 const TURN_SMOOTH    = 0.2;
 const CAMERA_DISTANCE = 80;
@@ -773,7 +773,7 @@ engine.runRenderLoop(() => {
     // Indoor: closer horizontally + lower = camera moves IN toward player.
     // The steep angle comes from Z shrinking much more than Y.
     const targetZ = insideBarn ? CAM_DEFAULT_Z * 0.4 : CAM_DEFAULT_Z;
-    const targetY = insideBarn ? CAM_DEFAULT_Y * 0.6 : CAM_DEFAULT_Y;
+    const targetY = insideBarn ? CAM_DEFAULT_Y * 0.8 : CAM_DEFAULT_Y;
 
     // Compute ideal camera world position from tpCamera + yaw + offsets
     const yaw = tpCamera.rotation.y;
