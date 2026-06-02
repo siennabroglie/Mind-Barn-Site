@@ -237,8 +237,8 @@ tpCamera.attachControl(canvas, true);
 const tpRenderCam = new BABYLON.ArcRotateCamera(
   'tpRenderCam',
   0,               // alpha — at spawn rotation.y=PI, so alpha=PI+PI=2PI=0
-  0.74,            // beta — matches old behind-the-shoulder angle
-  151,             // radius — matches old camera distance
+  0.55,            // beta — closer to horizontal, behind-the-shoulder feel
+  120,             // radius — closer to player
   new BABYLON.Vector3(0, 0, 0),
   scene
 );
@@ -752,10 +752,10 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z > bb.minimumWorld.z &&
                    tpCamera.position.z < bb.maximumWorld.z;
     }
-    const outdoorRadius = 151;
-    const outdoorBeta   = 0.74;
-    const indoorRadius  = 94;
-    const indoorBeta    = 1.07;
+    const outdoorRadius = 120;
+    const outdoorBeta   = 0.55;
+    const indoorRadius  = 65;
+    const indoorBeta    = 0.85;
     const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
     const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
     tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
@@ -783,6 +783,10 @@ scene.onBeforeCameraRenderObservable.add((cam) => {
     tpRenderCam.target.copyFrom(tpCamera.position);
     tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
     tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
+    // Force tpCamera's world matrix to update so the parented player mesh
+    // inherits the current rotation.y — without this, tpRenderCam's render
+    // pass uses stale parent transforms since tpCamera isn't the active renderer.
+    tpCamera.getWorldMatrix();
   }
 });
 
