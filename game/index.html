@@ -249,11 +249,15 @@ viewCamera.maxZ = 30000;
 // Each frame it probes from the player toward the ideal camera position.
 // If a wall blocks it, viewCamera.position.z is scaled proportionally.
 // The parented viewCamera stays untouched otherwise.
-const camBody = BABYLON.MeshBuilder.CreateSphere('camBody', { diameter: 2 }, scene);
-camBody.isVisible       = false;
+const camBody = BABYLON.MeshBuilder.CreateSphere('camBody', { diameter: 16 }, scene);
+camBody.isVisible       = true;   // DEBUG — make visible to see collision behavior
 camBody.isPickable      = false;
 camBody.checkCollisions = true;
 camBody.ellipsoid       = new BABYLON.Vector3(8, 8, 8);
+const camBodyMat = new BABYLON.StandardMaterial('camBodyMat', scene);
+camBodyMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
+camBodyMat.alpha = 0.5;
+camBody.material = camBodyMat;
 const CAM_DEFAULT_Z = -CAMERA_DISTANCE * 1.4;
 const CAM_DEFAULT_Y =  PLAYER_HEIGHT * 1.5;
 
@@ -785,7 +789,11 @@ engine.runRenderLoop(() => {
 
     // Move camBody toward ideal position — collision slides it along walls
     const displacement = idealWorld.subtract(camBody.position);
+    const posBefore = camBody.position.clone();
     camBody.moveWithCollisions(displacement);
+    const moved = BABYLON.Vector3.Distance(posBefore, camBody.position);
+    const wanted = displacement.length();
+    if (wanted > 1) console.log(`camBody: wanted ${wanted.toFixed(1)}, moved ${moved.toFixed(1)}, ratio will be ${(moved/wanted).toFixed(2)}`);
 
     // Project camBody onto the player→ideal ray to get a 0..1 ratio
     const playerHead = tpCamera.position.add(new BABYLON.Vector3(0, PLAYER_HEIGHT * 0.9, 0));
