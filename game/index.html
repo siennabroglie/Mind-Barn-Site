@@ -211,8 +211,8 @@ let _isoOrigPose = null;          // saved on first scene load for double-click 
 
 function isoLerpTo(pose) { _isoLerp = { ...pose }; }
 
-// 3P — UniversalCamera + viewCamera, matching the Babylon example pattern exactly.
-// tpCamera is the physics/movement body; viewCamera is parented to it for rendering.
+// 3P — tpCamera handles player movement (moveWithCollisions, input, gravity).
+// tpRenderCam (ArcRotateCamera) orbits the player with native wall collision.
 // scene.gravity drives tpCamera.applyGravity (Babylon's moveWithCollisions system).
 // Havok physics has its own gravity set via scene.enablePhysics() above.
 scene.gravity = new BABYLON.Vector3(0, -GRAVITY_PER_FRAME, 0);
@@ -228,38 +228,25 @@ tpCamera.ellipsoid = new BABYLON.Vector3(12, PLAYER_HEIGHT / 2, 12);
 tpCamera.ellipsoidOffset = new BABYLON.Vector3(0, PLAYER_HEIGHT / 2, 0);
 tpCamera.checkCollisions = true;
 tpCamera.applyGravity = true;
-tpCamera.inertia = 0;
 // attachControl called immediately, exactly as in the example
 tpCamera.attachControl(canvas, true);
 
-// viewCamera — parented behind/above tpCamera. setTarget called once at init while
-// tpCamera is at origin, which bakes a local "look forward + slightly down" rotation
-// that persists correctly as tpCamera moves and rotates around the farm.
-const viewCamera = new BABYLON.UniversalCamera(
-  'viewCam',
-  new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.5, -CAMERA_DISTANCE * 1.4),
+// tpRenderCam — ArcRotateCamera targeted at the player. checkCollisions +
+// collisionRadius handle wall avoidance natively. All user inputs disabled;
+// alpha/target are driven by tpCamera each frame in the render loop.
+const tpRenderCam = new BABYLON.ArcRotateCamera(
+  'tpRenderCam',
+  Math.PI,         // alpha — synced to player yaw + PI each frame
+  1.2,             // beta — ~21° from horizontal, slightly overhead
+  150,             // radius — straight-line distance from player
+  new BABYLON.Vector3(0, 0, 0),
   scene
 );
-viewCamera.parent = tpCamera;
-viewCamera.setTarget(new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.1, 0));
-viewCamera.minZ = 0.5;
-viewCamera.maxZ = 30000;
-
-// Camera collision probe — invisible sphere with moveWithCollisions.
-// Each frame it probes from the player toward the ideal camera position.
-// If a wall blocks it, viewCamera.position.z is scaled proportionally.
-// The parented viewCamera stays untouched otherwise.
-const camBody = BABYLON.MeshBuilder.CreateSphere('camBody', { diameter: 16 }, scene);
-camBody.isVisible       = true;   // DEBUG — make visible to see collision behavior
-camBody.isPickable      = false;
-camBody.checkCollisions = false;  // camBody probes WITH walls, player must NOT collide WITH camBody
-camBody.ellipsoid       = new BABYLON.Vector3(8, 8, 8);
-const camBodyMat = new BABYLON.StandardMaterial('camBodyMat', scene);
-camBodyMat.diffuseColor = new BABYLON.Color3(1, 0, 0);
-camBodyMat.alpha = 0.5;
-camBody.material = camBodyMat;
-const CAM_DEFAULT_Z = -CAMERA_DISTANCE * 1.4;
-const CAM_DEFAULT_Y =  PLAYER_HEIGHT * 1.5;
+tpRenderCam.checkCollisions = true;
+tpRenderCam.collisionRadius = new BABYLON.Vector3(8, 8, 8);
+tpRenderCam.minZ = 0.5;
+tpRenderCam.maxZ = 30000;
+tpRenderCam.inputs.clear();
 
 // ── FreeCameraKeyboardWalkInput ───────────────────────────────────────────────
 // Ported verbatim from the Babylon example. W/↑ forward, S/↓ back,
@@ -563,14 +550,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
     const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + PLAYER_HEIGHT, spawnZ);
-    tpCamera.rotation.y = Math.PI;
-
-    // Place camBody behind the player at the ideal camera world position
-    camBody.position = new BABYLON.Vector3(
-      spawnX + CAM_DEFAULT_Z * Math.sin(Math.PI),
-      groundY + PLAYER_HEIGHT + CAM_DEFAULT_Y,
-      spawnZ + CAM_DEFAULT_Z * Math.cos(Math.PI)
-    );
+    tpCamera.rotation.y = Math.PI; // face toward scene center
 
     onReady();
   }, null, () => onReady());
@@ -629,9 +609,9 @@ function switchToTP() {
   isoCamera.detachControl();
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCameras.push(tpCamera);
-  scene.activeCameras.push(viewCamera);
-  tpCamera.viewport   = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
-  viewCamera.viewport = new BABYLON.Viewport(0, 0, 1, 1);
+  scene.activeCameras.push(tpRenderCam);
+  tpCamera.viewport      = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
+  tpRenderCam.viewport   = new BABYLON.Viewport(0, 0, 1, 1);
   canvas.focus();
   document.getElementById('modeLabel').textContent = 'third person \u2014 wasd to walk \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
@@ -758,11 +738,10 @@ engine.runRenderLoop(() => {
     if (tDone && rDone) _isoLerp = null;
   }
 
-  // ── Third-person camera collision + barn interior ───────────────────────────
-  // viewCamera stays parented to tpCamera at its default local offset.
-  // camBody probes from player head toward the ideal camera world position
-  // using moveWithCollisions. If a wall blocks it, viewCamera.position.z is
-  // scaled proportionally. The parented setup handles orientation automatically.
+  // ── Third-person camera collision ──────────────────────────────────────────
+  // ── Third-person camera: ArcRotateCamera sync + barn interior ──────────────
+  // tpRenderCam's checkCollisions + collisionRadius handle wall avoidance
+  // natively. We just sync target/alpha to follow the player each frame.
   if (mode === 'tp' && tpMesh) {
     // Barn interior detection
     let insideBarn = false;
@@ -774,47 +753,22 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z < bb.maximumWorld.z;
     }
 
-    // Indoor: closer horizontally + lower = camera moves IN toward player.
-    // The steep angle comes from Z shrinking much more than Y.
-    const targetZ = insideBarn ? CAM_DEFAULT_Z * 0.4 : CAM_DEFAULT_Z;
-    const targetY = insideBarn ? CAM_DEFAULT_Y * 0.8 : CAM_DEFAULT_Y;
+    // Target = player chest height
+    tpRenderCam.target.copyFrom(tpCamera.position);
+    tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
 
-    // Compute ideal camera world position from tpCamera + yaw + offsets
-    const yaw = tpCamera.rotation.y;
-    const idealWorld = new BABYLON.Vector3(
-      tpCamera.position.x + targetZ * Math.sin(yaw),
-      tpCamera.position.y + targetY,
-      tpCamera.position.z + targetZ * Math.cos(yaw)
-    );
+    // Alpha locked behind the player
+    tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
 
-    // Move camBody toward ideal position — collision slides it along walls
-    const displacement = idealWorld.subtract(camBody.position);
-    const posBefore = camBody.position.clone();
-    camBody.moveWithCollisions(displacement);
-    const moved = BABYLON.Vector3.Distance(posBefore, camBody.position);
-    const wanted = displacement.length();
-    if (wanted > 1) console.log(`camBody: wanted ${wanted.toFixed(1)}, moved ${moved.toFixed(1)}, ratio will be ${(moved/wanted).toFixed(2)}`);
-
-    // Project camBody onto the player→ideal ray to get a 0..1 ratio
-    const playerHead = tpCamera.position.add(new BABYLON.Vector3(0, PLAYER_HEIGHT * 0.9, 0));
-    const ray = idealWorld.subtract(playerHead);
-    const rayLenSq = BABYLON.Vector3.Dot(ray, ray);
-    let ratio = 1;
-    if (rayLenSq > 0.01) {
-      const toCam = camBody.position.subtract(playerHead);
-      ratio = Math.max(0.15, Math.min(1, BABYLON.Vector3.Dot(toCam, ray) / rayLenSq));
-    }
-
-    // Scale viewCamera local Z by ratio. Lerp for smooth transitions.
-    const pullZ = targetZ * ratio;
-    viewCamera.position.z = BABYLON.Scalar.Lerp(viewCamera.position.z, pullZ, 0.2);
-    viewCamera.position.y = BABYLON.Scalar.Lerp(viewCamera.position.y, targetY, 0.05);
-
-    // Safety: if camBody is way too far from the player, teleport it
-    const maxArm = Math.sqrt(targetZ * targetZ + targetY * targetY) * 2;
-    if (BABYLON.Vector3.Distance(camBody.position, tpCamera.position) > maxArm) {
-      camBody.position.copyFrom(idealWorld);
-    }
+    // Outdoor vs indoor: adjust radius and beta
+    const outdoorRadius = 150;
+    const outdoorBeta   = 1.2;
+    const indoorRadius  = 70;
+    const indoorBeta    = 0.85;  // steeper overhead indoors
+    const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
+    const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
+    tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
+    tpRenderCam.beta   = BABYLON.Scalar.Lerp(tpRenderCam.beta,   targetBeta,   0.05);
   }
 
   if (windmillBlades) windmillBlades.rotation.z += WIND_SPEED;
