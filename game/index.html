@@ -236,9 +236,9 @@ tpCamera.attachControl(canvas, true);
 // alpha/target are driven by tpCamera each frame in the render loop.
 const tpRenderCam = new BABYLON.ArcRotateCamera(
   'tpRenderCam',
-  Math.PI,         // alpha — synced to player yaw + PI each frame
-  0.74,            // beta — matches old behind-the-shoulder angle (42° from horizontal)
-  151,             // radius — matches old camera distance sqrt(102² + 112²)
+  0,               // alpha — at spawn rotation.y=PI, so alpha=PI+PI=2PI=0
+  0.74,            // beta — matches old behind-the-shoulder angle
+  151,             // radius — matches old camera distance
   new BABYLON.Vector3(0, 0, 0),
   scene
 );
@@ -740,10 +740,10 @@ engine.runRenderLoop(() => {
 
   // ── Third-person camera collision ──────────────────────────────────────────
   // ── Third-person camera: ArcRotateCamera sync + barn interior ──────────────
-  // tpRenderCam's checkCollisions + collisionRadius handle wall avoidance
-  // natively. We just sync target/alpha to follow the player each frame.
+  // Sync moved to onBeforeCameraRenderObservable (below the render loop) for
+  // zero-lag — fires after tpCamera's inputs are processed, before tpRenderCam renders.
+  // Barn radius/beta lerp stays here since it doesn't need per-camera timing.
   if (mode === 'tp' && tpMesh) {
-    // Barn interior detection
     let insideBarn = false;
     if (barnMesh) {
       const bb = barnMesh.getBoundingInfo().boundingBox;
@@ -752,19 +752,10 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z > bb.minimumWorld.z &&
                    tpCamera.position.z < bb.maximumWorld.z;
     }
-
-    // Target = player chest height
-    tpRenderCam.target.copyFrom(tpCamera.position);
-    tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
-
-    // Alpha locked behind the player
-    tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
-
-    // Outdoor vs indoor: adjust radius and beta
     const outdoorRadius = 151;
-    const outdoorBeta   = 0.74;   // behind-the-shoulder
-    const indoorRadius  = 94;     // closer indoors
-    const indoorBeta    = 1.07;   // steeper overhead indoors
+    const outdoorBeta   = 0.74;
+    const indoorRadius  = 94;
+    const indoorBeta    = 1.07;
     const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
     const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
     tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
@@ -781,6 +772,18 @@ engine.runRenderLoop(() => {
   if (mode === 'tp') tpCamera.cameraDirection.y = Math.min(0, tpCamera.cameraDirection.y);
 
   scene.render();
+});
+
+// ── Zero-lag camera sync ──────────────────────────────────────────────────────
+// Fires after tpCamera's inputs have been processed (it's first in activeCameras)
+// but before tpRenderCam computes its position. This means alpha and target
+// reflect the CURRENT frame's player rotation, not the previous frame's.
+scene.onBeforeCameraRenderObservable.add((cam) => {
+  if (cam === tpRenderCam && mode === 'tp') {
+    tpRenderCam.target.copyFrom(tpCamera.position);
+    tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
+    tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
+  }
 });
 
 })(); // end async IIFE
