@@ -783,22 +783,22 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z > bb.minimumWorld.z &&
                    tpCamera.position.z < bb.maximumWorld.z;
     }
-    const outdoorRadius = 100;
-    const outdoorBeta   = 1;
-    const indoorRadius  = 55;
+    const outdoorRadius = 140;
+    const outdoorBeta   = 0.7;    // higher camera
+    const indoorRadius  = 70;
     const indoorBeta    = 0.85;
     const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
     const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
     tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
     tpRenderCam.beta   = BABYLON.Scalar.Lerp(tpRenderCam.beta,   targetBeta,   0.05);
 
-    // Camera alpha: lerp behind player when walking, stay put when standing
-    const isWalking = keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown']
-                   || keys['KeyA'] || keys['ArrowLeft'] || keys['KeyD'] || keys['ArrowRight'];
+    // Camera alpha: always lerp behind player using angle-aware lerp
+    // (Scalar.Lerp doesn't handle 0↔2π wrapping — camera would spin the long way)
     const goalAlpha = playerYaw + Math.PI;
-    if (isWalking) {
-      tpRenderCam.alpha = BABYLON.Scalar.Lerp(tpRenderCam.alpha, goalAlpha, 0.08);
-    }
+    let alphaDiff = goalAlpha - tpRenderCam.alpha;
+    while (alphaDiff >  Math.PI) alphaDiff -= 2 * Math.PI;
+    while (alphaDiff < -Math.PI) alphaDiff += 2 * Math.PI;
+    tpRenderCam.alpha += alphaDiff * 0.12;
   }
 
   if (windmillBlades) windmillBlades.rotation.z += WIND_SPEED;
