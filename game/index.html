@@ -783,10 +783,12 @@ scene.onBeforeCameraRenderObservable.add((cam) => {
     tpRenderCam.target.copyFrom(tpCamera.position);
     tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
     tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
-    // Force tpCamera's world matrix to update so the parented player mesh
-    // inherits the current rotation.y — without this, tpRenderCam's render
-    // pass uses stale parent transforms since tpCamera isn't the active renderer.
-    tpCamera.getWorldMatrix();
+    if (Math.random() < 0.02) console.log('rotation.y:', tpCamera.rotation.y.toFixed(3), 'alpha:', tpRenderCam.alpha.toFixed(3));
+    // Force parent + child world matrix recomputation so the player mesh
+    // reflects tpCamera.rotation.y — in-place rotation.y changes may not
+    // trigger Babylon's dirty flag automatically.
+    tpCamera.computeWorldMatrix(true);
+    if (tpMesh) tpMesh.computeWorldMatrix(true);
   }
 });
 
