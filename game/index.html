@@ -236,9 +236,9 @@ tpCamera.attachControl(canvas, true);
 // alpha/target are driven by tpCamera each frame in the render loop.
 const tpRenderCam = new BABYLON.ArcRotateCamera(
   'tpRenderCam',
-  0,               // alpha — at spawn rotation.y=PI, so alpha=PI+PI=2PI=0
-  0.55,            // beta — closer to horizontal, behind-the-shoulder feel
-  120,             // radius — closer to player
+  0,               // alpha — synced to playerYaw + PI
+  1,               // beta — slight overhead tilt
+  100,             // radius — distance from player
   new BABYLON.Vector3(0, 0, 0),
   scene
 );
@@ -248,15 +248,26 @@ tpRenderCam.minZ = 0.5;
 tpRenderCam.maxZ = 30000;
 tpRenderCam.inputs.clear();
 
+// Simple mouse drag → camera beta (vertical pitch) only. No player rotation.
+let _dragPrev = null;
+canvas.addEventListener('pointerdown', (e) => { if (mode === 'tp') _dragPrev = { x: e.clientX, y: e.clientY }; });
+canvas.addEventListener('pointerup',   ()  => { _dragPrev = null; });
+canvas.addEventListener('pointermove', (e) => {
+  if (!_dragPrev || mode !== 'tp') return;
+  const dy = e.clientY - _dragPrev.y;
+  tpRenderCam.beta = Math.max(0.3, Math.min(1.5, tpRenderCam.beta + dy * 0.005));
+  _dragPrev = { x: e.clientX, y: e.clientY };
+});
+
 // ── FreeCameraKeyboardWalkInput ───────────────────────────────────────────────
 // Ported verbatim from the Babylon example. W/↑ forward, S/↓ back,
 // A/← rotate left, D/→ rotate right.
 var FreeCameraKeyboardWalkInput = function () {
   this._keys = [];
-  this.keysUp    = [38, 87];
-  this.keysDown  = [40, 83];
-  this.keysLeft  = [37, 65];
-  this.keysRight = [39, 68];
+  this.keysUp    = [38, 87];   // W / ↑ — forward
+  this.keysDown  = [40, 83];   // S / ↓ — backward
+  this.keysLeft  = [];         // A/D handled in render loop for direct mesh rotation
+  this.keysRight = [];
 };
 FreeCameraKeyboardWalkInput.prototype.attachControl = function (noPreventDefault) {
   var _this = this;
@@ -398,11 +409,11 @@ FreeCameraSearchInput.prototype.detachControl = function () {
 FreeCameraSearchInput.prototype.getClassName  = function () { return 'FreeCameraSearchInput'; };
 FreeCameraSearchInput.prototype.getSimpleName = function () { return 'MouseSearchCamera'; };
 
-// Wire inputs — remove defaults, add custom — exactly as in the example
+// Wire inputs — remove defaults, add custom walk input (W/S only, no A/D)
+// Mouse look (FreeCameraSearchInput) removed — mouse drag will control camera beta only.
 tpCamera.inputs.removeByType('FreeCameraKeyboardMoveInput');
 tpCamera.inputs.removeByType('FreeCameraMouseInput');
 tpCamera.inputs.add(new FreeCameraKeyboardWalkInput());
-tpCamera.inputs.add(new FreeCameraSearchInput());
 
 scene.activeCamera = isoCamera;
 isoCamera.attachControl(canvas, true);
@@ -430,6 +441,8 @@ let groundMesh        = null;
 let barnMesh          = null;
 let groundPhysicsBody = null;
 let isCrouching       = false;
+let playerYaw         = Math.PI;   // player facing direction — starts facing scene center
+let meshYOffset       = 0;         // local Y offset for unparented mesh feet alignment
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
@@ -540,17 +553,25 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     shadowGen.addShadowCaster(realMesh);
     tpMesh = realMesh;
 
-    // Spawn tpCamera above the ground at the scene front.
-    // Offset by full PLAYER_HEIGHT so the camera is clearly above the surface
-    // before gravity takes over — prevents the character appearing sunken on
-    // the first frame before collision settles.
+    // Store the feet offset, then unparent — we sync position/rotation manually
+    // each frame to avoid the dual-camera world matrix propagation issue.
+    meshYOffset = realMesh.position.y;
+    realMesh.setParent(null);
+
     const spawnX = ctr.x;
     const spawnZ = ctr.z + sz.z * 0.35;
     const spawnRay = new BABYLON.Ray(new BABYLON.Vector3(spawnX, 5000, spawnZ), new BABYLON.Vector3(0, -1, 0), 10000);
     const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
     const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + PLAYER_HEIGHT, spawnZ);
-    tpCamera.rotation.y = Math.PI; // face toward scene center
+    tpCamera.rotation.y = Math.PI;
+    playerYaw = Math.PI;
+
+    // Position mesh at spawn
+    realMesh.position.x = spawnX;
+    realMesh.position.y = groundY + PLAYER_HEIGHT + meshYOffset;
+    realMesh.position.z = spawnZ;
+    realMesh.rotation.y = playerYaw;
 
     onReady();
   }, null, () => onReady());
@@ -738,12 +759,22 @@ engine.runRenderLoop(() => {
     if (tDone && rDone) _isoLerp = null;
   }
 
-  // ── Third-person camera collision ──────────────────────────────────────────
-  // ── Third-person camera: ArcRotateCamera sync + barn interior ──────────────
-  // Sync moved to onBeforeCameraRenderObservable (below the render loop) for
-  // zero-lag — fires after tpCamera's inputs are processed, before tpRenderCam renders.
-  // Barn radius/beta lerp stays here since it doesn't need per-camera timing.
+  // ── Third-person: player rotation, mesh sync, barn interior ────────────────
   if (mode === 'tp' && tpMesh) {
+    // A/D rotation — directly rotates playerYaw and syncs tpCamera so W/S
+    // movement direction matches the player's facing
+    if (keys['KeyA'] || keys['ArrowLeft'])  playerYaw -= 0.03;
+    if (keys['KeyD'] || keys['ArrowRight']) playerYaw += 0.03;
+    tpCamera.rotation.y = playerYaw;
+
+    // Sync unparented mesh position and rotation each frame
+    tpMesh.position.x = tpCamera.position.x;
+    tpMesh.position.y = tpCamera.position.y + meshYOffset;
+    tpMesh.position.z = tpCamera.position.z;
+    tpMesh.rotation.x = Math.PI / 2;  // stay upright
+    tpMesh.rotation.y = playerYaw;
+
+    // Barn interior detection
     let insideBarn = false;
     if (barnMesh) {
       const bb = barnMesh.getBoundingInfo().boundingBox;
@@ -752,14 +783,22 @@ engine.runRenderLoop(() => {
                    tpCamera.position.z > bb.minimumWorld.z &&
                    tpCamera.position.z < bb.maximumWorld.z;
     }
-    const outdoorRadius = 120;
-    const outdoorBeta   = 0.55;
-    const indoorRadius  = 65;
+    const outdoorRadius = 100;
+    const outdoorBeta   = 1;
+    const indoorRadius  = 55;
     const indoorBeta    = 0.85;
     const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
     const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
     tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
     tpRenderCam.beta   = BABYLON.Scalar.Lerp(tpRenderCam.beta,   targetBeta,   0.05);
+
+    // Camera alpha: lerp behind player when walking, stay put when standing
+    const isWalking = keys['KeyW'] || keys['ArrowUp'] || keys['KeyS'] || keys['ArrowDown']
+                   || keys['KeyA'] || keys['ArrowLeft'] || keys['KeyD'] || keys['ArrowRight'];
+    const goalAlpha = playerYaw + Math.PI;
+    if (isWalking) {
+      tpRenderCam.alpha = BABYLON.Scalar.Lerp(tpRenderCam.alpha, goalAlpha, 0.08);
+    }
   }
 
   if (windmillBlades) windmillBlades.rotation.z += WIND_SPEED;
@@ -774,21 +813,13 @@ engine.runRenderLoop(() => {
   scene.render();
 });
 
-// ── Zero-lag camera sync ──────────────────────────────────────────────────────
-// Fires after tpCamera's inputs have been processed (it's first in activeCameras)
-// but before tpRenderCam computes its position. This means alpha and target
-// reflect the CURRENT frame's player rotation, not the previous frame's.
+// ── Camera target sync ────────────────────────────────────────────────────────
+// Update the ArcRotateCamera target to follow the player position.
+// Alpha is handled in the render loop (lerps behind when moving).
 scene.onBeforeCameraRenderObservable.add((cam) => {
   if (cam === tpRenderCam && mode === 'tp') {
     tpRenderCam.target.copyFrom(tpCamera.position);
     tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
-    tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
-    if (Math.random() < 0.02) console.log('rotation.y:', tpCamera.rotation.y.toFixed(3), 'alpha:', tpRenderCam.alpha.toFixed(3));
-    // Force parent + child world matrix recomputation so the player mesh
-    // reflects tpCamera.rotation.y — in-place rotation.y changes may not
-    // trigger Babylon's dirty flag automatically.
-    tpCamera.computeWorldMatrix(true);
-    if (tpMesh) tpMesh.computeWorldMatrix(true);
   }
 });
 
