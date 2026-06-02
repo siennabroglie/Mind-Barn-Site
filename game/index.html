@@ -237,13 +237,13 @@ tpCamera.attachControl(canvas, true);
 const tpRenderCam = new BABYLON.ArcRotateCamera(
   'tpRenderCam',
   Math.PI,         // alpha — synced to player yaw + PI each frame
-  1.2,             // beta — ~21° from horizontal, slightly overhead
-  150,             // radius — straight-line distance from player
+  0.74,            // beta — matches old behind-the-shoulder angle (42° from horizontal)
+  151,             // radius — matches old camera distance sqrt(102² + 112²)
   new BABYLON.Vector3(0, 0, 0),
   scene
 );
 tpRenderCam.checkCollisions = true;
-tpRenderCam.collisionRadius = new BABYLON.Vector3(8, 8, 8);
+tpRenderCam.collisionRadius = new BABYLON.Vector3(15, 15, 15);
 tpRenderCam.minZ = 0.5;
 tpRenderCam.maxZ = 30000;
 tpRenderCam.inputs.clear();
@@ -761,10 +761,10 @@ engine.runRenderLoop(() => {
     tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
 
     // Outdoor vs indoor: adjust radius and beta
-    const outdoorRadius = 150;
-    const outdoorBeta   = 1.2;
-    const indoorRadius  = 70;
-    const indoorBeta    = 0.85;  // steeper overhead indoors
+    const outdoorRadius = 151;
+    const outdoorBeta   = 0.74;   // behind-the-shoulder
+    const indoorRadius  = 94;     // closer indoors
+    const indoorBeta    = 1.07;   // steeper overhead indoors
     const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
     const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
     tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
