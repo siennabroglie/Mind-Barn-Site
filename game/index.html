@@ -104,7 +104,7 @@
 <script>
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 const PLAYER_HEIGHT  = 68;            // 75 reduced 10% — fits barn staircase clearances
-const WALK_SPEED     = 3.6;
+const WALK_SPEED     = 4.2;
 const GRAVITY_PER_FRAME = 4.0;
 const TURN_SMOOTH    = 0.2;
 const CAMERA_DISTANCE = 80;
@@ -134,14 +134,12 @@ scene.ambientColor = new BABYLON.Color3(0, 0, 0);
 scene.collisionsEnabled = true;
 
 // ─── Havok physics ────────────────────────────────────────────────────────────
-try {
-  const havokInstance = await HavokPhysics();
-  const havokPlugin   = new BABYLON.HavokPlugin(true, havokInstance);
-  scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
-  console.log('Havok loaded OK');
-} catch(e) {
-  console.error('Havok failed to load:', e);
-}
+// Initialise the WASM engine (loaded via CDN UMD script above), create the
+// Babylon plugin, and enable physics with standard earth gravity.
+// Farm meshes will each get a PhysicsAggregate (mass:0 = static collider).
+const havokInstance = await HavokPhysics();
+const havokPlugin   = new BABYLON.HavokPlugin(true, havokInstance);
+scene.enablePhysics(new BABYLON.Vector3(0, -9.81, 0), havokPlugin);
 
 // ─── Lights — daylight with proper contrast ───────────────────────────────────
 // Three-light setup mimicking real daylight:
@@ -213,8 +211,8 @@ let _isoOrigPose = null;          // saved on first scene load for double-click 
 
 function isoLerpTo(pose) { _isoLerp = { ...pose }; }
 
-// 3P — UniversalCamera + viewCamera, matching the Babylon example pattern exactly.
-// tpCamera is the physics/movement body; viewCamera is parented to it for rendering.
+// 3P — tpCamera handles player movement (moveWithCollisions, input, gravity).
+// tpRenderCam (ArcRotateCamera) orbits the player with native wall collision.
 // scene.gravity drives tpCamera.applyGravity (Babylon's moveWithCollisions system).
 // Havok physics has its own gravity set via scene.enablePhysics() above.
 scene.gravity = new BABYLON.Vector3(0, -GRAVITY_PER_FRAME, 0);
@@ -230,22 +228,25 @@ tpCamera.ellipsoid = new BABYLON.Vector3(12, PLAYER_HEIGHT / 2, 12);
 tpCamera.ellipsoidOffset = new BABYLON.Vector3(0, PLAYER_HEIGHT / 2, 0);
 tpCamera.checkCollisions = true;
 tpCamera.applyGravity = true;
-tpCamera.inertia = 0;  // reset cameraDirection each frame — prevents upward slide from wall collision accumulating
 // attachControl called immediately, exactly as in the example
 tpCamera.attachControl(canvas, true);
 
-// viewCamera — parented behind/above tpCamera. setTarget called once at init while
-// tpCamera is at origin, which bakes a local "look forward + slightly down" rotation
-// that persists correctly as tpCamera moves and rotates around the farm.
-const viewCamera = new BABYLON.UniversalCamera(
-  'viewCam',
-  new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.5, -CAMERA_DISTANCE * 1.4),
+// tpRenderCam — ArcRotateCamera targeted at the player. checkCollisions +
+// collisionRadius handle wall avoidance natively. All user inputs disabled;
+// alpha/target are driven by tpCamera each frame in the render loop.
+const tpRenderCam = new BABYLON.ArcRotateCamera(
+  'tpRenderCam',
+  Math.PI,         // alpha — synced to player yaw + PI each frame
+  1.2,             // beta — ~21° from horizontal, slightly overhead
+  150,             // radius — straight-line distance from player
+  new BABYLON.Vector3(0, 0, 0),
   scene
 );
-viewCamera.parent = tpCamera;
-viewCamera.setTarget(new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.1, 0));
-viewCamera.minZ = 0.5;
-viewCamera.maxZ = 30000;
+tpRenderCam.checkCollisions = true;
+tpRenderCam.collisionRadius = new BABYLON.Vector3(8, 8, 8);
+tpRenderCam.minZ = 0.5;
+tpRenderCam.maxZ = 30000;
+tpRenderCam.inputs.clear();
 
 // ── FreeCameraKeyboardWalkInput ───────────────────────────────────────────────
 // Ported verbatim from the Babylon example. W/↑ forward, S/↓ back,
@@ -426,22 +427,16 @@ pumpkinMat.backFaceCulling = false;
 let windmillBlades    = null;
 let tpMesh            = null;
 let groundMesh        = null;
+let barnMesh          = null;
 let groundPhysicsBody = null;
 let isCrouching       = false;
-// Bodies the camera collision ray should ignore — ground and all walkable platforms.
-// Populated by reference at PhysicsAggregate creation so name lookups aren't needed.
-const excludedCamBodies = new Set();
-// Mesh references excluded from camera pickWithRay — ground and walkable platforms.
-const excludedCamMeshes = new Set();
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
 BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_eb55eb0a5eaa4d039d9bb556cba04376.glb', scene, (meshes) => {
-  console.log('farm GLB loaded, meshes:', meshes.length);
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
   }
-  console.log('checkpoint 1 - ground mesh:', groundMesh ? 'found' : 'not found');
 
   for (const m of meshes) {
     if (!m.getTotalVertices || m.getTotalVertices() === 0) continue;
@@ -453,35 +448,34 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
       m.edgesWidth = 3.5;
       m.edgesColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
     }
+    // All meshes are solid for the UniversalCamera collision system.
+    // (No pass-through exceptions — stepladder, ladder, barn_second_floor are
+    // now proper walkable surfaces.)
     m.checkCollisions = true;
-    m.isPickable      = true;
     if (m.name === 'windmill_blades') windmillBlades = m;
+    if (m.name === 'barn') barnMesh = m;
 
-    if (scene.getPhysicsEngine()) {
-      try {
-        const shapeType = (
-          m.name === 'ground_plane'      ||
-          m.name === 'barn_second_floor' ||
-          m.name === 'stepladder'
-        ) ? BABYLON.PhysicsShapeType.BOX : BABYLON.PhysicsShapeType.MESH;
-        const agg = new BABYLON.PhysicsAggregate(m, shapeType, { mass: 0, friction: 0.5, restitution: 0 }, scene);
-        if (KINEMATIC_PLATFORMS.has(m.name)) {
-          agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
-          excludedCamBodies.add(agg.body);
-          excludedCamMeshes.add(m);
-        }
-        if (m.name === 'ground_plane') {
-          groundPhysicsBody = agg.body;
-          excludedCamBodies.add(agg.body);
-          excludedCamMeshes.add(m);
-        }
-      } catch (e) {
-        console.warn('PhysicsAggregate skipped for', m.name, e);
+    // Havok physics collider — mass:0 = immovable static body.
+    // BOX: flat/ramp surfaces where exact mesh topology would cause gaps or snagging.
+    // MESH: everything else — walls, fences, irregular structures.
+    // Kinematic platforms also get ANIMATED motion type.
+    try {
+      const shapeType = (
+        m.name === 'ground_plane'      ||  // flat terrain — BOX is cheaper and exact
+        m.name === 'barn_second_floor' ||  // slatted floor — BOX ignores plank gaps
+        m.name === 'stepladder'            // ramp stairs — BOX gives smooth incline, MESH exposes individual rungs
+      ) ? BABYLON.PhysicsShapeType.BOX : BABYLON.PhysicsShapeType.MESH;
+      const agg = new BABYLON.PhysicsAggregate(m, shapeType, { mass: 0, friction: 0.5, restitution: 0 }, scene);
+      if (KINEMATIC_PLATFORMS.has(m.name)) {
+        agg.body.setMotionType(BABYLON.PhysicsMotionType.ANIMATED);
       }
+      if (m.name === 'ground_plane') groundPhysicsBody = agg.body;
+    } catch (e) {
+      console.warn('PhysicsAggregate skipped for', m.name, e);
     }
   }
-  console.log('checkpoint 2 - mesh loop done');
 
+  // Smooth ground normals (visual only — does not affect Havok colliders)
   if (groundMesh) {
     const positions = groundMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
     const indices   = groundMesh.getIndices();
@@ -491,8 +485,14 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
       groundMesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, newNormals);
     }
   }
-  console.log('checkpoint 3 - normals done');
 
+  // ── No ground-snap loop ───────────────────────────────────────────────────────
+  // The old system raycasted downward and repositioned each mesh to sit on the
+  // terrain. With Havok, the GLB's built-in transforms are the ground truth —
+  // meshes are placed wherever the 3D artist put them, and Havok builds static
+  // colliders from those positions. Nothing to snap.
+
+  // Fit cameras to scene
   const sceneBB = computeSceneBounds(meshes);
   const ctr = sceneBB.center, sz = sceneBB.size;
   const dim = Math.max(sz.x, sz.y, sz.z);
@@ -501,20 +501,18 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
 
   isoCamera.target = new BABYLON.Vector3(ctr.x, sz.y * 0.3, ctr.z);
   isoCamera.radius = Math.max(sz.x, sz.z) * 1.7 + 400;
+  // Save this as the "home" pose — double-clicking empty space returns here
   _isoOrigPose = {
     target: isoCamera.target.clone(),
     alpha:  isoCamera.alpha,
     beta:   isoCamera.beta,
     radius: isoCamera.radius,
   };
-  console.log('checkpoint 4 - cameras fit, loading player...');
 
   // Load player mesh and spawn tpCamera
   BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_d78870260f514a8abe5c8b22bbecb990.glb', scene, (pMeshes) => {
-    console.log('player GLB loaded, meshes:', pMeshes.length);
     const realMesh = pMeshes.find(m => m.getTotalVertices && m.getTotalVertices() > 0);
-    if (!realMesh) { console.error('no vertices found in player GLB'); onReady(); return; }
-    console.log('realMesh found:', realMesh.name);
+    if (!realMesh) { onReady(); return; }
 
     // Stand the model upright (it's exported lying on its back)
     realMesh.setParent(null);
@@ -552,11 +550,10 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
     const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + PLAYER_HEIGHT, spawnZ);
-    tpCamera.rotation.y = Math.PI;
-    console.log('player spawned at', tpCamera.position.toString(), 'groundY:', groundY);
+    tpCamera.rotation.y = Math.PI; // face toward scene center
 
     onReady();
-  }, null, (s, msg, err) => { console.error('Player GLB failed to load:', msg, err); onReady(); });
+  }, null, () => onReady());
 
 }, null, (s, msg, err) => console.error('Farm load failed:', msg, err));
 
@@ -612,9 +609,9 @@ function switchToTP() {
   isoCamera.detachControl();
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCameras.push(tpCamera);
-  scene.activeCameras.push(viewCamera);
-  tpCamera.viewport   = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
-  viewCamera.viewport = new BABYLON.Viewport(0, 0, 1, 1);
+  scene.activeCameras.push(tpRenderCam);
+  tpCamera.viewport      = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
+  tpRenderCam.viewport   = new BABYLON.Viewport(0, 0, 1, 1);
   canvas.focus();
   document.getElementById('modeLabel').textContent = 'third person \u2014 wasd to walk \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
@@ -741,50 +738,37 @@ engine.runRenderLoop(() => {
     if (tDone && rDone) _isoLerp = null;
   }
 
-  // ── Third-person camera collision ─────────────────────────────────────────
-  // scene.pickWithRay sees the same checkCollisions meshes the player walks
-  // into — no Havok needed, and no system mismatch.
-  // Ray sweeps from player head to ideal camera world position.
-  // On hit, pull viewCamera.position.z in to the safe point.
-  // When clear, snap directly to idealZ — no lerp lag means no drifting ahead.
+  // ── Third-person camera collision ──────────────────────────────────────────
+  // ── Third-person camera: ArcRotateCamera sync + barn interior ──────────────
+  // tpRenderCam's checkCollisions + collisionRadius handle wall avoidance
+  // natively. We just sync target/alpha to follow the player each frame.
   if (mode === 'tp' && tpMesh) {
-    const idealZ = -CAMERA_DISTANCE * 1.4;
-    const idealY =  PLAYER_HEIGHT   * 1.5;
-    const yaw    = tpCamera.rotation.y;
-
-    const idealWorld = tpCamera.position.add(new BABYLON.Vector3(
-      -idealZ * Math.sin(yaw),
-       idealY,
-      -idealZ * Math.cos(yaw)
-    ));
-    const rayOrigin = tpCamera.position.add(
-      new BABYLON.Vector3(0, PLAYER_HEIGHT * 0.9, 0)
-    );
-    const toCam = idealWorld.subtract(rayOrigin);
-    const dist  = toCam.length();
-
-    if (dist > 0.01) {
-      const dir    = toCam.normalizeToNew();
-      const camRay = new BABYLON.Ray(rayOrigin, dir, dist);
-      const hit    = scene.pickWithRay(camRay, (m) =>
-        m.isPickable &&
-        m.checkCollisions &&
-        m !== tpMesh &&
-        !excludedCamMeshes.has(m)
-      );
-
-      if (hit && hit.hit) {
-        const safeDist  = Math.max(0, hit.distance - 5);
-        const safeWorld = rayOrigin.add(dir.scale(safeDist));
-        const dx = safeWorld.x - tpCamera.position.x;
-        const dz = safeWorld.z - tpCamera.position.z;
-        let targetZ = dx * Math.sin(yaw) + dz * Math.cos(yaw);
-        targetZ = Math.min(-50, targetZ);
-        viewCamera.position.z = BABYLON.Scalar.Lerp(viewCamera.position.z, targetZ, 0.15);
-      } else {
-        viewCamera.position.z = idealZ;  // clear path — lock to ideal, no lag
-      }
+    // Barn interior detection
+    let insideBarn = false;
+    if (barnMesh) {
+      const bb = barnMesh.getBoundingInfo().boundingBox;
+      insideBarn = tpCamera.position.x > bb.minimumWorld.x &&
+                   tpCamera.position.x < bb.maximumWorld.x &&
+                   tpCamera.position.z > bb.minimumWorld.z &&
+                   tpCamera.position.z < bb.maximumWorld.z;
     }
+
+    // Target = player chest height
+    tpRenderCam.target.copyFrom(tpCamera.position);
+    tpRenderCam.target.y += PLAYER_HEIGHT * 0.5;
+
+    // Alpha locked behind the player
+    tpRenderCam.alpha = tpCamera.rotation.y + Math.PI;
+
+    // Outdoor vs indoor: adjust radius and beta
+    const outdoorRadius = 150;
+    const outdoorBeta   = 1.2;
+    const indoorRadius  = 70;
+    const indoorBeta    = 0.85;  // steeper overhead indoors
+    const targetRadius = insideBarn ? indoorRadius : outdoorRadius;
+    const targetBeta   = insideBarn ? indoorBeta   : outdoorBeta;
+    tpRenderCam.radius = BABYLON.Scalar.Lerp(tpRenderCam.radius, targetRadius, 0.05);
+    tpRenderCam.beta   = BABYLON.Scalar.Lerp(tpRenderCam.beta,   targetBeta,   0.05);
   }
 
   if (windmillBlades) windmillBlades.rotation.z += WIND_SPEED;
