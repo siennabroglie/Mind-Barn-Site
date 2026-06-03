@@ -102,7 +102,7 @@ tpCamera.ellipsoidOffset=new BABYLON.Vector3(0,PLAYER_HEIGHT/2,0);
 tpCamera.checkCollisions=true; tpCamera.applyGravity=true;
 tpCamera.attachControl(canvas,true);
 
-const tpRenderCam=new BABYLON.ArcRotateCamera('tpRenderCam',0,1,100,new BABYLON.Vector3(0,0,0),scene);
+const tpRenderCam=new BABYLON.ArcRotateCamera('tpRenderCam',0,1.2,140,new BABYLON.Vector3(0,0,0),scene);
 tpRenderCam.checkCollisions=true; tpRenderCam.collisionRadius=new BABYLON.Vector3(15,15,15);
 tpRenderCam.minZ=0.5; tpRenderCam.maxZ=30000; tpRenderCam.inputs.clear();
 
@@ -285,23 +285,21 @@ engine.runRenderLoop(()=>{
     const targetRadius=insideBarn?70:140;
     tpRenderCam.radius=BABYLON.Scalar.Lerp(tpRenderCam.radius,targetRadius,0.05);
     if(insideBarn&&!_wasBarn)tpRenderCam.beta=0.85;
-    if(!insideBarn&&_wasBarn)tpRenderCam.beta=1.0;
+    if(!insideBarn&&_wasBarn)tpRenderCam.beta=1.2;
     _wasBarn=insideBarn;
   }
   if(windmillBlades)windmillBlades.rotation.z+=WIND_SPEED;
   if(mode==='tp'){if(isJumping)tpCamera.cameraDirection.y=jumpVelY;else tpCamera.cameraDirection.y=Math.min(0,tpCamera.cameraDirection.y);}
   scene.render();
-});
 
-// Camera sync — runs AFTER Babylon processes tpCamera inputs, BEFORE tpRenderCam renders
-scene.onBeforeCameraRenderObservable.add((cam)=>{
-  if(cam===tpRenderCam&&mode==='tp'){
+  // Camera sync AFTER scene.render — our alpha/target set is the last write,
+  // so it persists until the next frame's scene.render() reads it.
+  if(mode==='tp'&&tpMesh){
     tpRenderCam.target.copyFrom(tpCamera.position);
     tpRenderCam.target.y+=PLAYER_HEIGHT*0.5;
-    // Kill inertial offsets so Babylon doesn't override our alpha/beta
     tpRenderCam.inertialAlphaOffset=0;
     tpRenderCam.inertialBetaOffset=0;
-    // Angle-aware alpha lerp — camera follows behind player
+    // Angle-aware alpha — camera behind player
     const goalAlpha=playerYaw+Math.PI;
     let alphaDiff=goalAlpha-tpRenderCam.alpha;
     while(alphaDiff>Math.PI)alphaDiff-=2*Math.PI;
