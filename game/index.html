@@ -89,8 +89,11 @@
     <div class="row"><span>Reset view</span><span><kbd>double-click empty</kbd></span></div>
     <div class="row"><span>Enter third person</span><span><kbd>button below</kbd></span></div>
     <h3>Third person</h3>
-    <div class="row"><span>Walk</span><span><kbd>WASD</kbd> <kbd>arrows</kbd></span></div>
-    <div class="row"><span>Look</span><span><kbd>mouse drag</kbd></span></div>
+    <div class="row"><span>Turn</span><span><kbd>←</kbd> <kbd>→</kbd> <kbd>A</kbd> <kbd>D</kbd></span></div>
+    <div class="row"><span>Move</span><span><kbd>↑</kbd> <kbd>↓</kbd> <kbd>W</kbd> <kbd>S</kbd></span></div>
+    <div class="row"><span>Sprint</span><span><kbd>shift</kbd> + forward</span></div>
+    <div class="row"><span>Jump</span><span><kbd>space</kbd></span></div>
+    <div class="row"><span>Tilt camera</span><span><kbd>mouse drag</kbd></span></div>
     <div class="row"><span>Exit</span><span><kbd>esc</kbd></span></div>
     <div class="note">press <kbd>H</kbd> or click to close</div>
   </div>
@@ -120,6 +123,10 @@ const CROUCH_TRIGGER     = PLAYER_HEIGHT * 1.15;  // ceiling distance that trigg
 // 0.28 was too aggressive — player could slip through barn roof panels.
 const CROUCH_ELLIPSOID_Y = PLAYER_HEIGHT * 0.42;  // ~84% of standing half-height
 const KINEMATIC_PLATFORMS = new Set(['stepladder', 'ladder', 'barn_second_floor']);
+const JUMP_VELOCITY = 28;                 // initial up displacement/frame (~1.4x body height apex); tune 24–34
+const JUMP_GRAVITY  = GRAVITY_PER_FRAME;  // reuse 4.0 so the arc matches world gravity
+const GROUND_PROBE  = 14;                 // downward feet-to-floor tolerance for the grounded test
+const SPRINT_MULT   = 1.8;                // forward sprint multiplier (1.7–2.0)
 
 // ─── Engine and scene ─────────────────────────────────────────────────────────
 const canvas = document.getElementById('renderCanvas');
@@ -443,6 +450,9 @@ let groundPhysicsBody = null;
 let isCrouching       = false;
 let playerYaw         = Math.PI;   // player facing direction — starts facing scene center
 let meshYOffset       = 0;         // local Y offset for unparented mesh feet alignment
+let isJumping         = false;
+let jumpVelY          = 0;
+let jumpLatched       = false;     // require Space re-press; prevents auto-hop while held
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
@@ -627,6 +637,7 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 // ─── Mode switching ───────────────────────────────────────────────────────────
 function switchToTP() {
   mode = 'tp';
+  isJumping = false; jumpVelY = 0; jumpLatched = false; tpCamera.applyGravity = true;
   isoCamera.detachControl();
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCameras.push(tpCamera);
@@ -634,12 +645,13 @@ function switchToTP() {
   tpCamera.viewport      = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
   tpRenderCam.viewport   = new BABYLON.Viewport(0, 0, 1, 1);
   canvas.focus();
-  document.getElementById('modeLabel').textContent = 'third person \u2014 wasd to walk \u00b7 drag to look \u00b7 esc to exit';
+  document.getElementById('modeLabel').textContent = 'third person \u2014 arrows to move \u00b7 shift to sprint \u00b7 space to jump \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
 }
 
 function switchToIso() {
   mode = 'iso';
+  isJumping = false; jumpVelY = 0; jumpLatched = false; tpCamera.applyGravity = true;
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCamera = isoCamera;
   isoLerpTo({ target: new BABYLON.Vector3(tpCamera.position.x, 0, tpCamera.position.z) });
@@ -741,6 +753,17 @@ function updateCrouch() {
   }
 }
 
+// ─── Grounded test ────────────────────────────────────────────────────────────
+// Short downward ray from the camera origin (which sits at feet level — the
+// ellipsoid extends upward via ellipsoidOffset.y). Unlike the crouch ceiling
+// predicate, this MUST include groundMesh and the kinematic platforms — the
+// player stands and lands on those. Only self (tpMesh) is excluded.
+function isGrounded() {
+  const ray = new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), GROUND_PROBE);
+  const hit = scene.pickWithRay(ray, (m) => m.checkCollisions && m !== tpMesh);
+  return !!(hit && hit.hit && hit.distance < GROUND_PROBE);
+}
+
 // ─── Render loop ──────────────────────────────────────────────────────────────
 engine.runRenderLoop(() => {
   updateIsoKeys();
@@ -766,6 +789,31 @@ engine.runRenderLoop(() => {
     if (keys['KeyA'] || keys['ArrowLeft'])  playerYaw -= 0.03;
     if (keys['KeyD'] || keys['ArrowRight']) playerYaw += 0.03;
     tpCamera.rotation.y = playerYaw;
+
+    // Sprint: faster only while holding Shift AND moving forward.
+    // FreeCameraKeyboardWalkInput.checkInputs reads camera.speed during
+    // scene.render() (after this loop body), so setting it here applies this frame.
+    const movingForward = keys['ArrowUp'] || keys['KeyW'];
+    const sprinting = movingForward && (keys['ShiftLeft'] || keys['ShiftRight']);
+    tpCamera.speed = sprinting ? WALK_SPEED * SPRINT_MULT : WALK_SPEED;
+
+    // Jump — single, ground-only. We own vertical velocity for the duration and
+    // disable applyGravity so Babylon doesn't double-apply gravity; the line-811
+    // clamp is made jump-aware below so the upward impulse survives.
+    if (!keys['Space']) jumpLatched = false;          // released → re-armed
+    if (!isJumping) {
+      if (keys['Space'] && !jumpLatched && isGrounded()) {
+        isJumping = true; jumpLatched = true;
+        jumpVelY = JUMP_VELOCITY;
+        tpCamera.applyGravity = false;
+      }
+    } else {
+      jumpVelY -= JUMP_GRAVITY;
+      if (jumpVelY <= 0 && isGrounded()) {
+        isJumping = false; jumpVelY = 0;
+        tpCamera.applyGravity = true;
+      }
+    }
 
     // Sync unparented mesh position and rotation each frame
     tpMesh.position.x = tpCamera.position.x;
@@ -808,7 +856,10 @@ engine.runRenderLoop(() => {
   // if that normal has any upward component (corners, angled faces, ledge edges)
   // the Y accumulates faster than gravity can cancel it. Clamping to ≤0 allows
   // gravity to pull down normally but kills any collision-induced upward drift.
-  if (mode === 'tp') tpCamera.cameraDirection.y = Math.min(0, tpCamera.cameraDirection.y);
+  if (mode === 'tp') {
+    if (isJumping) tpCamera.cameraDirection.y = jumpVelY;                        // we own Y; clamp disabled
+    else tpCamera.cameraDirection.y = Math.min(0, tpCamera.cameraDirection.y);   // original anti-drift
+  }
 
   scene.render();
 });
