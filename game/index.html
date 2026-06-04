@@ -129,6 +129,13 @@ const JUMP_GRAVITY  = 0.85;               // jump arc gravity, decoupled from wo
                                           // (lower = floatier/longer hang; apex ≈ V²/(2·G) ≈ 132 units)
 const GROUND_PROBE  = 14;                 // feet-to-floor tolerance for the grounded test
 const SPRINT_MULT   = 1.8;                // forward sprint multiplier
+// Ground terrain — the GLB ground_plane has no real mounds, only ~300 isolated noise spikes
+// poking out of near-flat ground. We replace its heightfield with smooth procedural rolling
+// (value-noise fBm) so it reads as natural varied mounds & dips with no sharp points.
+// NB: the ground node is scaled [2500, 1, 2500] — X/Z huge, Y unscaled — so the world
+// footprint is ~5000 units but AMP is in *world* Y units directly. Small AMP = invisible.
+const GROUND_MOUND_AMP  = 60;             // peak mound height / dip depth in world units
+const GROUND_MOUND_FREQ = 8;              // mound count across the field — higher = more, smaller
 // Third-person camera framing — outdoors: far & high (whole body behind);
 // barn interior: close & head-level (behind the head). Tunable "custom setting".
 const CAM_OUT  = { z: -CAMERA_DISTANCE * 1.4, y: PLAYER_HEIGHT * 1.5  }; // (-112, 102)
@@ -142,8 +149,12 @@ const engine = new BABYLON.Engine(canvas, true, { stencil: true });
 (async () => {  // async IIFE — required so we can await HavokPhysics()
 
 const scene = new BABYLON.Scene(engine);
-scene.clearColor   = new BABYLON.Color4(0, 0, 0, 1);
-scene.ambientColor = new BABYLON.Color3(0, 0, 0);
+// Paper-white background (temporary — the future galaxy skybox replaces this; nothing
+// else depends on clearColor, so that swap is a one-liner).
+scene.clearColor   = new BABYLON.Color4(0.96, 0.96, 0.96, 1);
+// Uniform ambient floor — lifts shadowed faces toward white, but kept low enough that the
+// directional sun can still shade slopes (so terrain mounds & object form read clearly).
+scene.ambientColor = new BABYLON.Color3(0.42, 0.42, 0.42);
 // Babylon built-in collisions still needed for UniversalCamera movement
 scene.collisionsEnabled = true;
 
@@ -164,29 +175,39 @@ try {
 // 3. Subtle opposite directional — bounce light fill from the other side
 
 // Primary "sun" — bright directional, casts shadows
-const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.5, -1.0, -0.3), scene);
+// Raking (lower) angle, not near-overhead — gentle ground mounds need side light to show
+// their slopes; a top-down sun washes near-horizontal terrain to uniform white.
+const sun = new BABYLON.DirectionalLight('sun', new BABYLON.Vector3(-0.6, -0.45, -0.35), scene);
 sun.position  = new BABYLON.Vector3(1000, 2000, 800);
-sun.intensity = 1.0;
+sun.intensity = 0.7;    // primary slope shading — bright faces ≈ white, faces away ≈ ambient grey
 sun.diffuse   = new BABYLON.Color3(1, 1, 1);
 sun.specular  = new BABYLON.Color3(0, 0, 0);
 
 // Dim hemisphere — sky bounce fill
 const hemi = new BABYLON.HemisphericLight('hemi', new BABYLON.Vector3(0, 1, 0), scene);
-hemi.intensity   = 0.25;
+hemi.intensity   = 0.10;
 hemi.diffuse     = new BABYLON.Color3(1, 1, 1);
 hemi.specular    = new BABYLON.Color3(0, 0, 0);
-hemi.groundColor = new BABYLON.Color3(0.7, 0.7, 0.7);
+hemi.groundColor = new BABYLON.Color3(0.85, 0.85, 0.85);   // lifted so undersides stay near-white
 
 // Subtle opposite-side directional — simulates bounce light fill
 const fill = new BABYLON.DirectionalLight('fill', new BABYLON.Vector3(0.5, -0.3, 0.3), scene);
-fill.intensity = 0.15;
+fill.intensity = 0.05;
 fill.diffuse   = new BABYLON.Color3(1, 1, 1);
 fill.specular  = new BABYLON.Color3(0, 0, 0);
 
+// Let the directional light tightly fit its shadow depth range to the casters each frame.
+// Without this it spanned ±10000 units, and the exponential shadow map lost all precision
+// over that range — shadows simply never appeared on the huge ground. (This overrides the
+// manual sun.shadowMinZ/MaxZ set after load.)
+sun.autoCalcShadowZBounds = true;
+
 const shadowGen = new BABYLON.ShadowGenerator(2048, sun);
-shadowGen.useBlurExponentialShadowMap = true;
-shadowGen.blurKernel = 64;
-shadowGen.darkness   = 0.55;
+// PCF (percentage-closer filtering) — soft-edged contact shadows that survive the large
+// ground footprint, unlike the exponential map. Medium quality = gentle, not crisp/severe.
+shadowGen.usePercentageCloserFiltering = true;
+shadowGen.filteringQuality = BABYLON.ShadowGenerator.QUALITY_MEDIUM;
+shadowGen.darkness = 0.5;      // mid-grey shadows — present but not too dark
 
 // ─── Cameras ──────────────────────────────────────────────────────────────────
 // ISO — ArcRotateCamera with Babylon Viewer-style controls:
@@ -428,12 +449,13 @@ let mode = 'iso';
 const whiteMat = new BABYLON.StandardMaterial('white', scene);
 whiteMat.diffuseColor    = new BABYLON.Color3(0.95, 0.95, 0.95);
 whiteMat.specularColor   = new BABYLON.Color3(0, 0, 0);
-whiteMat.ambientColor    = new BABYLON.Color3(0, 0, 0);  // no ambient term — lights only
+whiteMat.ambientColor    = new BABYLON.Color3(1, 1, 1);  // receive scene.ambientColor (flat paper base)
 whiteMat.backFaceCulling = false;
 
 const pumpkinMat = new BABYLON.StandardMaterial('pumpkin', scene);
 pumpkinMat.diffuseColor  = new BABYLON.Color3(1, 0.42, 0);
 pumpkinMat.specularColor = new BABYLON.Color3(0, 0, 0);
+pumpkinMat.ambientColor  = new BABYLON.Color3(1, 1, 1);  // lift to the same paper register
 pumpkinMat.backFaceCulling = false;
 
 // ─── State ────────────────────────────────────────────────────────────────────
@@ -508,12 +530,84 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const positions = groundMesh.getVerticesData(BABYLON.VertexBuffer.PositionKind);
     const indices   = groundMesh.getIndices();
     if (positions && indices) {
+      // ── Replace the heightfield with smooth procedural rolling mounds ─────────
+      // The source ground is near-flat with isolated noise spikes (no real mounds),
+      // so smoothing alone just flattens it. Instead we rewrite each vertex's Y from
+      // smooth value-noise fBm — varied mounds & dips with no sharp points. Only Y is
+      // touched (XZ fixed → footprint unchanged); the field is centered on the original
+      // ground level so mounds rise above and dips fall below it.
+      const vCount = positions.length / 3;
+      // Deterministic value noise (hash → bilinear smoothstep interp) + 4-octave fBm.
+      const hash = (i, j) => {
+        let n = (i * 374761393 + j * 668265263) | 0;
+        n = (n ^ (n >> 13)); n = (n * 1274126177) | 0;
+        return ((n ^ (n >> 16)) >>> 0) / 4294967295;
+      };
+      const vnoise = (x, z) => {
+        const xi = Math.floor(x), zi = Math.floor(z), xf = x - xi, zf = z - zi;
+        const u = xf * xf * (3 - 2 * xf), w = zf * zf * (3 - 2 * zf);
+        const a = hash(xi, zi),     b = hash(xi + 1, zi);
+        const c = hash(xi, zi + 1), d = hash(xi + 1, zi + 1);
+        return (a * (1 - u) + b * u) * (1 - w) + (c * (1 - u) + d * u) * w;
+      };
+      const fbm = (x, z) => {
+        let s = 0, amp = 0.5, f = 1;
+        for (let o = 0; o < 4; o++) { s += amp * (vnoise(x * f, z * f) * 2 - 1); f *= 2; amp *= 0.5; }
+        return s;
+      };
+      // Find the XZ extent so the noise frequency is independent of the mesh's scale.
+      let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+      for (let v = 0; v < vCount; v++) {
+        const x = positions[v * 3], z = positions[v * 3 + 2];
+        if (x < xMin) xMin = x; if (x > xMax) xMax = x;
+        if (z < zMin) zMin = z; if (z > zMax) zMax = z;
+      }
+      const xSpan = (xMax - xMin) || 1, zSpan = (zMax - zMin) || 1;
+      const raw = new Float32Array(vCount);
+      let mean = 0;
+      for (let v = 0; v < vCount; v++) {
+        const u = (positions[v * 3] - xMin) / xSpan, w = (positions[v * 3 + 2] - zMin) / zSpan;
+        raw[v] = fbm(u * GROUND_MOUND_FREQ, w * GROUND_MOUND_FREQ);
+        mean += raw[v];
+      }
+      mean /= vCount;
+      let peak = 0;
+      for (let v = 0; v < vCount; v++) { raw[v] -= mean; if (Math.abs(raw[v]) > peak) peak = Math.abs(raw[v]); }
+      peak = peak || 1;
+      for (let v = 0; v < vCount; v++) positions[v * 3 + 1] = (raw[v] / peak) * GROUND_MOUND_AMP;
+
+      // Bake the mesh's own scaling into the vertices, then reset it to 1. The ground node is
+      // scaled [2500, 1, 2500]; while that non-uniform scale is live, Babylon transforms the
+      // local normals by its inverse-transpose (1/2500, 1, 1/2500), which collapses every
+      // normal to ~straight-up and erases all slope shading (the surface rolls but renders flat
+      // grey). Baking makes the geometry uniformly scaled so ComputeNormals — and the renderer —
+      // get correct world normals. World position is unchanged (rotation is identity here).
+      const sx = groundMesh.scaling.x, sy = groundMesh.scaling.y, sz = groundMesh.scaling.z;
+      for (let v = 0; v < vCount; v++) {
+        positions[v * 3]     *= sx;
+        positions[v * 3 + 1] *= sy;
+        positions[v * 3 + 2] *= sz;
+      }
+      groundMesh.scaling.copyFromFloats(1, 1, 1);
+
+      // setVerticesData (not updateVerticesData) — glTF buffers import non-updatable, so
+      // updateVerticesData would silently no-op. The 3rd arg marks it updatable.
+      groundMesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, positions, true);
+
+      // Recompute normals so the shading follows the new surface. ComputeNormals derives
+      // direction from triangle winding, and this glTF's winding (right-handed source →
+      // Babylon's left-handed space) yields DOWNWARD normals — so the top face is lit from
+      // below and renders as flat ambient grey. Detect that (mean normal Y < 0) and flip.
       const newNormals = [];
       BABYLON.VertexData.ComputeNormals(positions, indices, newNormals);
+      let nySum = 0;
+      for (let i = 1; i < newNormals.length; i += 3) nySum += newNormals[i];
+      if (nySum < 0) for (let i = 0; i < newNormals.length; i++) newNormals[i] = -newNormals[i];
       groundMesh.setVerticesData(BABYLON.VertexBuffer.NormalKind, newNormals);
+      groundMesh.refreshBoundingInfo();
     }
   }
-  console.log('checkpoint 3 - normals done');
+  console.log('checkpoint 3 - terrain smoothed, normals done');
 
   const sceneBB = computeSceneBounds(meshes);
   const ctr = sceneBB.center, sz = sceneBB.size;
