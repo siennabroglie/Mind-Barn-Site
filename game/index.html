@@ -145,6 +145,9 @@ const CAM_FRAME_LERP = 0.05;              // how fast framing eases on entering/
 // ─── Engine and scene ─────────────────────────────────────────────────────────
 const canvas = document.getElementById('renderCanvas');
 const engine = new BABYLON.Engine(canvas, true, { stencil: true });
+// Supersampling — render at 2x resolution then downscale. Smooths the stair-stepping on the
+// thick edge-render outlines (and everything else). 0.5 = 2x; lower = sharper but heavier.
+engine.setHardwareScalingLevel(0.5);
 
 (async () => {  // async IIFE — required so we can await HavokPhysics()
 
@@ -208,6 +211,11 @@ const shadowGen = new BABYLON.ShadowGenerator(2048, sun);
 shadowGen.usePercentageCloserFiltering = true;
 shadowGen.filteringQuality = BABYLON.ShadowGenerator.QUALITY_MEDIUM;
 shadowGen.darkness = 0.5;      // mid-grey shadows — present but not too dark
+// Depth + normal bias to kill self-shadow "acne" — the diagonal striping that appeared on
+// surfaces at grazing angles to the sun (e.g. the water-tower legs). normalBias handles the
+// grazing-angle case; these values clear it without the shadows visibly detaching.
+shadowGen.bias = 0.004;
+shadowGen.normalBias = 0.1;
 
 // ─── Cameras ──────────────────────────────────────────────────────────────────
 // ISO — ArcRotateCamera with Babylon Viewer-style controls:
@@ -281,6 +289,89 @@ viewCamera.parent = tpCamera;
 viewCamera.setTarget(new BABYLON.Vector3(0, PLAYER_HEIGHT * 1.1, 0));
 viewCamera.minZ = 0.5;
 viewCamera.maxZ = 30000;
+
+// ─── Hand-drawn warp (outline-softening compromise) ────────────────────────────
+// The edge-render outlines are crisp but rigidly straight. This full-screen post-process
+// samples the final image at static value-noise-offset positions, so straight lines come out
+// gently wavy / hand-drawn. It reads only the camera's own color output (no geometry buffer),
+// so unlike the earlier sketch outline it works in BOTH ISO and third-person. It warps the
+// whole image slightly — keep WARP.amp small. (NB: 'warpScale', not 'scale' — Babylon's
+// built-in post-process vertex shader already declares a vec2 'scale'.)
+const USE_WARP = true;
+// amp = wobble in render px; scale = wave frequency. edgeLo/edgeHi gate the warp to high-
+// contrast areas: a pixel only wobbles if there's an outline within ~amp px of it, so the
+// black lines go wavy while flat shaded surfaces are left completely untouched (no noise
+// imprint / "stripes"). dither = tiny per-pixel noise to clean any residual banding.
+const WARP = { amp: 5.0, scale: 14.0, dither: 1.0, edgeLo: 0.06, edgeHi: 0.22 };
+
+BABYLON.Effect.ShadersStore['paperWarpFragmentShader'] = `
+precision highp float;
+varying vec2 vUV;
+uniform sampler2D textureSampler;
+uniform vec2  screenSize;
+uniform float amp;
+uniform float warpScale;
+uniform float dither;
+uniform float edgeLo;
+uniform float edgeHi;
+// Non-directional hash (Dave Hoskins). The classic sin(dot(...)) hash has diagonal
+// periodicity, which the warp imprints onto thin shaded elements as regular diagonal
+// "stripes"; this one is featureless, so any residual imprint reads as faint grain.
+float hash(vec2 p){
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float vnoise(vec2 p){
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  float a = hash(i), b = hash(i + vec2(1.0, 0.0)), c = hash(i + vec2(0.0, 1.0)), d = hash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+float fbm(vec2 p){ return 0.6 * vnoise(p) + 0.4 * vnoise(p * 2.13 + 9.1); }
+float luma(vec3 c){ return dot(c, vec3(0.299, 0.587, 0.114)); }
+void main(void){
+  vec2 px = 1.0 / screenSize;
+  float lc = luma(texture2D(textureSampler, vUV).rgb);
+  // local contrast over a ring at radius ~amp → is there an outline near this pixel?
+  float contrast = 0.0;
+  for (int k = 0; k < 8; k++){
+    float a = float(k) * 0.785398;
+    vec2 o = vec2(cos(a), sin(a)) * amp * px;
+    contrast = max(contrast, abs(lc - luma(texture2D(textureSampler, vUV + o).rgb)));
+  }
+  float edge = smoothstep(edgeLo, edgeHi, contrast);   // 0 on flat surfaces, 1 on outlines
+  vec2 d = vec2(fbm(vUV * warpScale), fbm(vUV * warpScale + 17.3)) - 0.5;
+  vec3 col = texture2D(textureSampler, vUV + d * 2.0 * amp * px * edge).rgb;
+  col += (hash(gl_FragCoord.xy) - 0.5) * dither / 255.0;   // mild dither for any residual banding
+  gl_FragColor = vec4(col, 1.0);
+}
+`;
+
+function makePaperWarp(cam){
+  const pp = new BABYLON.PostProcess('paperWarp', 'paperWarp',
+    ['screenSize','amp','warpScale','dither','edgeLo','edgeHi'], [], 1.0, cam);
+  pp.onApply = (effect) => {
+    effect.setFloat2('screenSize', engine.getRenderWidth(), engine.getRenderHeight());
+    effect.setFloat('amp', WARP.amp);
+    effect.setFloat('warpScale', WARP.scale);
+    effect.setFloat('dither', WARP.dither);
+    effect.setFloat('edgeLo', WARP.edgeLo);
+    effect.setFloat('edgeHi', WARP.edgeHi);
+  };
+  return pp;
+}
+// Attach to both presenting cameras (ISO + third-person view). Pure color pass, so the
+// dual-camera third-person rig that broke the gbuffer outline is not a problem here.
+// FXAA runs AFTER the warp so it smooths the (now-wavy) edge lines — this is what stops the
+// thin distant outlines from pixelating; 2x supersampling alone can't fully resolve them.
+if (USE_WARP) {
+  [isoCamera, viewCamera].forEach((cam) => {
+    makePaperWarp(cam);
+    new BABYLON.FxaaPostProcess('fxaa', 1.0, cam);
+  });
+}
+
 
 // ── FreeCameraKeyboardWalkInput ───────────────────────────────────────────────
 // Ported verbatim from the Babylon example. W/↑ forward, S/↓ back,
@@ -493,7 +584,8 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     if (m.name !== 'ground_plane') shadowGen.addShadowCaster(m);
     if (m.name !== 'ground_plane') {
       m.enableEdgesRendering(0.95);
-      m.edgesWidth = 3.5;
+      m.edgesWidth = 30;   // thicker outlines (was 3.5). edgesWidth is a small, resolution-
+                           // independent unit — tune this number to taste in the browser.
       m.edgesColor = new BABYLON.Color4(0.02, 0.02, 0.02, 1);
     }
     m.checkCollisions = true;
