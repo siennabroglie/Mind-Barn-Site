@@ -136,6 +136,14 @@ const SPRINT_MULT   = 1.8;                // forward sprint multiplier
 // footprint is ~5000 units but AMP is in *world* Y units directly. Small AMP = invisible.
 const GROUND_MOUND_AMP  = 60;             // peak mound height / dip depth in world units
 const GROUND_MOUND_FREQ = 8;              // mound count across the field — higher = more, smaller
+// Player light orb — a subtle white point light that follows the player in third-person only.
+const PLAYER_LIGHT_INTENSITY = 0.4;       // subtle brightening — the main dial
+const PLAYER_LIGHT_RANGE     = 220;       // orb radius in world units (~3x PLAYER_HEIGHT)
+const PLAYER_LIGHT_Y         = -PLAYER_HEIGHT * 0.3;  // sit the orb around the player's middle
+// Player self-emission — the player's PBR material has no ambient/IBL fill, so against the
+// bright paper-white scene it reads dark & dull. Emitting a fraction of its own (orange)
+// texture makes it lighter AND more colourful/saturated. 0 = none, ~0.5 = vivid.
+const PLAYER_EMISSIVE = 0.4;
 // Third-person camera framing — outdoors: far & high (whole body behind);
 // barn interior: close & head-level (behind the head). Tunable "custom setting".
 const CAM_OUT  = { z: -CAMERA_DISTANCE * 1.4, y: PLAYER_HEIGHT * 1.5  }; // (-112, 102)
@@ -276,6 +284,18 @@ tpCamera.applyGravity = true;
 tpCamera.inertia = 0;  // reset cameraDirection each frame — prevents upward slide from wall collision accumulating
 // attachControl called immediately, exactly as in the example
 tpCamera.attachControl(canvas, true);
+
+// ─── Player light orb ──────────────────────────────────────────────────────────
+// Subtle white point light parented to the player — a soft radial glow that follows them.
+// range gives the smooth gradient falloff ("orb"); not added to shadowGen, so it casts no
+// shadows. Enabled only in third-person (toggled in switchToTP/switchToIso); starts off (ISO).
+const playerLight = new BABYLON.PointLight('playerLight', new BABYLON.Vector3(0, PLAYER_LIGHT_Y, 0), scene);
+playerLight.parent    = tpCamera;          // follows the player in world space every frame
+playerLight.intensity = PLAYER_LIGHT_INTENSITY;
+playerLight.range     = PLAYER_LIGHT_RANGE;
+playerLight.diffuse   = new BABYLON.Color3(1, 1, 1);
+playerLight.specular  = new BABYLON.Color3(0, 0, 0);   // match the no-specular paper look
+playerLight.setEnabled(false);
 
 // viewCamera — parented behind/above tpCamera. setTarget called once at init while
 // tpCamera is at origin, which bakes a local "look forward + slightly down" rotation
@@ -542,12 +562,14 @@ whiteMat.diffuseColor    = new BABYLON.Color3(0.95, 0.95, 0.95);
 whiteMat.specularColor   = new BABYLON.Color3(0, 0, 0);
 whiteMat.ambientColor    = new BABYLON.Color3(1, 1, 1);  // receive scene.ambientColor (flat paper base)
 whiteMat.backFaceCulling = false;
+whiteMat.maxSimultaneousLights = 5;  // sun/hemi/fill + the player orb (default 4 would drop one)
 
 const pumpkinMat = new BABYLON.StandardMaterial('pumpkin', scene);
 pumpkinMat.diffuseColor  = new BABYLON.Color3(1, 0.42, 0);
 pumpkinMat.specularColor = new BABYLON.Color3(0, 0, 0);
 pumpkinMat.ambientColor  = new BABYLON.Color3(1, 1, 1);  // lift to the same paper register
 pumpkinMat.backFaceCulling = false;
+pumpkinMat.maxSimultaneousLights = 5;
 
 // ─── State ────────────────────────────────────────────────────────────────────
 let windmillBlades    = null;
@@ -747,6 +769,18 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const bb1 = realMesh.getBoundingInfo().boundingBox;
     realMesh.position.y -= bb1.minimumWorld.y - tpCamera.position.y;
 
+    // Make the player read lighter & more colourful against the bright paper-white scene:
+    // its PBR material gets no ambient fill, so emit a fraction of its own albedo (orange)
+    // texture. Also raise the light limit so the player orb lights it alongside sun/hemi/fill.
+    const pm = realMesh.material;
+    if (pm) {
+      if (pm.albedoTexture && 'emissiveColor' in pm) {
+        pm.emissiveTexture = pm.albedoTexture;   // emit its own colour, not flat white
+        pm.emissiveColor   = new BABYLON.Color3(PLAYER_EMISSIVE, PLAYER_EMISSIVE, PLAYER_EMISSIVE);
+      }
+      pm.maxSimultaneousLights = 5;
+    }
+
     shadowGen.addShadowCaster(realMesh);
     tpMesh = realMesh;
 
@@ -824,6 +858,7 @@ function switchToTP() {
   scene.activeCameras.push(viewCamera);
   tpCamera.viewport   = new BABYLON.Viewport(0, 0, 0.0001, 0.0001);
   viewCamera.viewport = new BABYLON.Viewport(0, 0, 1, 1);
+  playerLight.setEnabled(true);   // player orb on in third-person
   canvas.focus();
   document.getElementById('modeLabel').textContent = 'third person \u2014 arrows to move \u00b7 shift to sprint \u00b7 space to jump \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
@@ -834,6 +869,7 @@ function switchToIso() {
   isJumping = false; jumpVelY = 0; jumpLatched = false; tpCamera.applyGravity = true;
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCamera = isoCamera;
+  playerLight.setEnabled(false);  // player orb off in the overview
   isoLerpTo({ target: new BABYLON.Vector3(tpCamera.position.x, 0, tpCamera.position.z) });
   isoCamera.attachControl(canvas, true);
   canvas.focus();
