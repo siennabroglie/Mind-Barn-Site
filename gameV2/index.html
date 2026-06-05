@@ -1025,7 +1025,7 @@ function buildVerticalPlane(name, W, H, segsX, segsY) {
 // Create a ground PNG poster that sways in the wind. style 'lean' (rigid tip about the base) or
 // 'bend' (foliage-like top wave). Seats its base on the terrain at (x,z) and registers for sway.
 function addGroundPng(url, opts) {
-  const { x, z, height, aspect, style } = opts;
+  const { x, z, height, aspect, style, tilt = 0 } = opts;   // tilt = static lean about local Z (radians)
   const W = height * aspect, H = height;
 
   const tex = new BABYLON.Texture(url, scene, false, true, undefined, null,
@@ -1055,6 +1055,7 @@ function addGroundPng(url, opts) {
     pivot.position.set(x, gY, z);                // pivot at the base, on the ground
     mesh.parent = pivot;
     mesh.position.set(0, 0, 0);                  // verts Y 0..H → base sits at the pivot
+    mesh.rotation.z = tilt;                      // static lean about Z (base stays planted), for variety
     const rest = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind).slice();
     windPlanes.push({ mesh, pivot, style, phase, H, W, rest });
   } else {
@@ -1066,6 +1067,7 @@ function addGroundPng(url, opts) {
     pivot.position.set(x, gY, z);                // pivot at the base, on the ground
     plane.parent = pivot;
     plane.position.set(0, H / 2, 0);             // lift so the plane's bottom edge sits at the pivot
+    plane.rotation.z = tilt;                     // static lean about Z, for variety
     windPlanes.push({ pivot, style, phase, H });
   }
 }
@@ -1435,14 +1437,15 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     spawnPoint = tpCamera.position.clone();   // remembered for respawn after falling off
     console.log('player spawned at', tpCamera.position.toString(), 'groundY:', groundY);
 
-    // ─── Barn-silo — a transparent PNG poster standing in front of spawn, rippling in the wind ───
-    // Player faces -Z at spawn, so "in front" is -Z. 'paper' = an out-of-plane travelling ripple
-    // (flaps like a sheet of paper), anchored at the base. ('lean'/'bend' available for other PNGs.)
-    const SILO_DIST = 400, SILO_HEIGHT = 320;
-    addGroundPng('barn-silo.png', {
-      x: spawnX, z: spawnZ - SILO_DIST,
-      height: SILO_HEIGHT, aspect: 1891 / 1316, style: 'paper',
-    });
+    // ─── Scene props — barn in the centre, others arranged around it per the reference sketch ───
+    // Offsets are fractions of islandR (kept within half-radius). All are 'paper' (wind-rippling) posters
+    // facing +Z (toward the player's start), each slightly tilted about Z for dimensional variety.
+    // Left/right: +X is the viewer's left (sketch left). If it reads mirrored, flip the X signs.
+    const R = islandR * 0.55;   // spread — distance of props from centre (smaller = closer together)
+    addGroundPng('barn-silo.png',    { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
+    addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
+    addGroundPng('haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
+    addGroundPng('route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
 
     onReady();
   }, null, (s, msg, err) => { console.error('Player GLB failed to load:', msg, err); onReady(); });
