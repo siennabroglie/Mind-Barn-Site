@@ -956,8 +956,7 @@ let islandFloorY = -1e9;          // lowest terrain Y; below this the player has
 let fallTime = 0;                 // seconds the player has been below the terrain
 let spawnPoint = null;            // saved spawn position, for respawn after falling
 let tpSavedPos = null;            // third-person position, preserved across overview ↔ third-person switches
-let linkProp = null, linkOpened = false;   // the prop that opens the link, + once-guard
-const LINK_URL = 'https://siennabroglie.wixsite.com/my-site-1/nonprofits';
+const propLinks = [];   // { prop, url, opened } — touch a prop in third person → open its page once
 
 // Current gust event. Calm between gusts (strength 0). updateWind() schedules them; getWind()
 // reads the active gust as a front sweeping across the island.
@@ -1468,13 +1467,21 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     // facing +Z (toward the player's start), each slightly tilted about Z for dimensional variety.
     // Left/right: +X is the viewer's left (sketch left). If it reads mirrored, flip the X signs.
     const R = islandR * 0.55;   // spread — distance of props from centre (smaller = closer together)
-    addGroundPng('barn-silo.png',    { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
-    linkProp = addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
+    const barnProp = addGroundPng('barn-silo.png', { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
+    const treeProp = addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
     addGroundPng('haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
     addGroundPng('route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
-    // Walk into the tree (third person) → open the nonprofits page.
+    // Touch a prop (third person) → its page. newTab:true opens a new tab; false navigates this tab
+    // (the barn "steps into" the barn-interior game — navigation is reliable, never popup-blocked).
+    propLinks.push({ prop: treeProp, url: 'https://siennabroglie.wixsite.com/my-site-1/nonprofits', newTab: true, opened: false });
+    propLinks.push({ prop: barnProp, url: 'https://siennabroglie.github.io/Mind-Barn-Site/game-barnInterior/index.html', newTab: false, opened: false });
     tpCamera.onCollide = (collided) => {
-      if (collided === linkProp && !linkOpened) { linkOpened = true; window.open(LINK_URL, '_blank'); }
+      for (const L of propLinks) {
+        if (collided === L.prop && !L.opened) {
+          L.opened = true;
+          if (L.newTab) window.open(L.url, '_blank'); else window.location.href = L.url;
+        }
+      }
     };
 
     applyModeVisibility();   // game starts in overview → show the drawing-ground, hide the 3D scene
