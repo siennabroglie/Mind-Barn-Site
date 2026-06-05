@@ -956,6 +956,8 @@ let islandFloorY = -1e9;          // lowest terrain Y; below this the player has
 let fallTime = 0;                 // seconds the player has been below the terrain
 let spawnPoint = null;            // saved spawn position, for respawn after falling
 let tpSavedPos = null;            // third-person position, preserved across overview ↔ third-person switches
+let linkProp = null, linkOpened = false;   // the prop that opens the link, + once-guard
+const LINK_URL = 'https://siennabroglie.wixsite.com/my-site-1/nonprofits';
 
 // Current gust event. Calm between gusts (strength 0). updateWind() schedules them; getWind()
 // reads the active gust as a front sweeping across the island.
@@ -1058,6 +1060,7 @@ function addGroundPng(url, opts) {
     mesh.rotation.z = tilt;                      // static lean about Z (base stays planted), for variety
     const rest = mesh.getVerticesData(BABYLON.VertexBuffer.PositionKind).slice();
     windPlanes.push({ mesh, pivot, style, phase, H, W, rest });
+    return mesh;
   } else {
     const plane = BABYLON.MeshBuilder.CreatePlane('gpngLean', { width: W, height: H }, scene);
     plane.material = mat;
@@ -1069,6 +1072,7 @@ function addGroundPng(url, opts) {
     plane.position.set(0, H / 2, 0);             // lift so the plane's bottom edge sits at the pivot
     plane.rotation.z = tilt;                     // static lean about Z, for variety
     windPlanes.push({ pivot, style, phase, H });
+    return plane;
   }
 }
 
@@ -1465,9 +1469,13 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     // Left/right: +X is the viewer's left (sketch left). If it reads mirrored, flip the X signs.
     const R = islandR * 0.55;   // spread — distance of props from centre (smaller = closer together)
     addGroundPng('barn-silo.png',    { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
-    addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
+    linkProp = addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
     addGroundPng('haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
     addGroundPng('route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
+    // Walk into the tree (third person) → open the nonprofits page.
+    tpCamera.onCollide = (collided) => {
+      if (collided === linkProp && !linkOpened) { linkOpened = true; window.open(LINK_URL, '_blank'); }
+    };
 
     applyModeVisibility();   // game starts in overview → show the drawing-ground, hide the 3D scene
     onReady();
