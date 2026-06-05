@@ -12,13 +12,7 @@
   /* ── Control panel — match the Mind Barn site: black, white serif, flat orange rectangles ── */
   :root { --orange: #ef9234; --orange-dim: #d57e26; --serif: 'Times New Roman', Times, serif; }
 
-  #modeLabel {
-    position: absolute; top: 18px; left: 50%;
-    transform: translateX(-50%);
-    color: rgba(255,255,255,0.55); font-family: var(--serif);
-    font-size: 16px; z-index: 10; pointer-events: none;
-    letter-spacing: 0; white-space: nowrap;
-  }
+  #modeLabel { display: none; }   /* top instruction line hidden */
 
   #ui {
     position: absolute; bottom: 24px; left: 50%;
@@ -295,6 +289,8 @@ isoCamera.angularSensibilityY = 800;
 isoCamera.inputs.attached.pointers.buttons = [0, 1, 2];
 // Two-finger drag pans the target on touch (pinch still zooms)
 isoCamera.inputs.attached.pointers.multiTouchPanning = true;
+// Remove the camera's built-in arrow-key orbit — in overview the arrows move only the CHARACTER.
+isoCamera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
 // Prevent iso camera from clipping through barn walls / large geometry when zoomed in.
 // ArcRotateCamera stops moving (doesn't slide) when its collisionRadius hits a mesh.
 isoCamera.checkCollisions = true;
@@ -937,6 +933,7 @@ pumpkinMat.maxSimultaneousLights = 5;
 let windmillBlades    = null;
 let tpMesh            = null;
 let groundMesh        = null;
+let isoGround         = null;        // flat drawing-ground shown in overview mode
 let groundPhysicsBody = null;
 let isCrouching       = false;
 let barnMesh          = null;
@@ -948,6 +945,8 @@ let jumpVelY          = 0;
 let jumpAppliedVY     = 0;            // smoothed vertical velocity actually fed to movement
 let jumpLatched       = false;       // require Space re-press (no auto-hop)
 let tpFeetBaseY       = 0;           // realMesh local Y where feet sit at the camera origin
+let charBaseS = 1, charBaseFeetY = 0;   // base character scale + feet offset (for per-mode scaling)
+const CHAR_ISO_SCALE = 2;            // character is this much larger in overview mode
 // ─── Wind state ───
 let windT             = 0;           // wind time accumulator (seconds)
 const windPlanes      = [];          // ground PNGs that sway: { pivot|mesh, style, phase, H, rest, mat }
@@ -956,6 +955,7 @@ let islandCX = 0, islandCZ = 0, islandR = 2000;   // blob centre + radius (set a
 let islandFloorY = -1e9;          // lowest terrain Y; below this the player has fallen off
 let fallTime = 0;                 // seconds the player has been below the terrain
 let spawnPoint = null;            // saved spawn position, for respawn after falling
+let tpSavedPos = null;            // third-person position, preserved across overview ↔ third-person switches
 
 // Current gust event. Calm between gusts (strength 0). updateWind() schedules them; getWind()
 // reads the active gust as a front sweeping across the island.
@@ -1352,6 +1352,23 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     islandCZ = (gbb.minimumWorld.z + gbb.maximumWorld.z) / 2;
     islandR  = 0.5 * Math.max(gbb.maximumWorld.x - gbb.minimumWorld.x, gbb.maximumWorld.z - gbb.minimumWorld.z);
     islandFloorY = gbb.minimumWorld.y;   // anything well below this means the player fell off
+
+    // Overview "ground" — a flat horizontal plane showing the farm drawing. In iso mode this replaces
+    // the 3D terrain + props; the character walks on it (its surface is what the iso movement/feet
+    // re-seat onto). Fullbright so the line-art reads clearly from the overview angle.
+    const ASPECT = 3389 / 1894;
+    const isoW = islandR * 2.0;
+    const isoTex = new BABYLON.Texture('overview-scene.jpg', scene);
+    const isoMat = new BABYLON.StandardMaterial('isoGroundMat', scene);
+    isoMat.diffuseTexture = isoTex;
+    isoMat.emissiveTexture = isoTex; isoMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
+    isoMat.specularColor = new BABYLON.Color3(0, 0, 0);
+    isoMat.disableLighting = true;
+    isoGround = BABYLON.MeshBuilder.CreateGround('isoGround', { width: isoW, height: isoW / ASPECT }, scene);
+    isoGround.material = isoMat;
+    isoGround.position.set(islandCX, (gbb.minimumWorld.y + gbb.maximumWorld.y) / 2, islandCZ);
+    isoGround.checkCollisions = true; isoGround.isPickable = true;
+    isoGround.setEnabled(false);   // off until overview mode
     // setupFloaters();   // wind-gust streak PNGs — disabled for now
   }
   console.log('checkpoint 3 - terrain smoothed, normals done');
@@ -1362,8 +1379,10 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
   sun.shadowMinZ = -dim * 2;
   sun.shadowMaxZ = dim * 2;
 
-  isoCamera.target = new BABYLON.Vector3(ctr.x, sz.y * 0.3, ctr.z);
-  isoCamera.radius = Math.max(sz.x, sz.z) * 1.7 + 400;
+  isoCamera.target = new BABYLON.Vector3(islandCX, isoGround.position.y, islandCZ);   // look at the drawing
+  isoCamera.alpha  = Math.PI * 1.75;   // orbit so the sketch reads upright (±π/2 to spin it 90°)
+  isoCamera.beta   = Math.PI / 3;      // looking down at the drawing
+  isoCamera.radius = islandR * 3.8;    // zoomed out so the whole drawing sits in frame
   _isoOrigPose = {
     target: isoCamera.target.clone(),
     alpha:  isoCamera.alpha,
@@ -1404,6 +1423,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     const bb1 = realMesh.getBoundingInfo().boundingBox;
     realMesh.position.y -= bb1.minimumWorld.y - tpCamera.position.y;
     tpFeetBaseY = realMesh.position.y;   // baseline: feet at the camera origin
+    charBaseS = s; charBaseFeetY = tpFeetBaseY;   // remember base scale/offset for per-mode resizing
 
     // Make the player read lighter & more colourful against the bright paper-white scene:
     // its PBR material gets no ambient fill, so emit a fraction of its own albedo (orange)
@@ -1420,20 +1440,22 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     shadowGen.addShadowCaster(realMesh);
     tpMesh = realMesh;
 
-    // Spawn tpCamera above the ground at the scene front.
-    // Offset by full PLAYER_HEIGHT so the camera is clearly above the surface
-    // before gravity takes over — prevents the character appearing sunken on
-    // the first frame before collision settles.
-    const spawnX = ctr.x;
-    const spawnZ = ctr.z + sz.z * 0.35;
-    const spawnRay = new BABYLON.Ray(new BABYLON.Vector3(spawnX, 5000, spawnZ), new BABYLON.Vector3(0, -1, 0), 10000);
-    const spawnHit = scene.pickWithRay(spawnRay, m => m === groundMesh);
-    const groundY  = (spawnHit && spawnHit.hit) ? spawnHit.pickedPoint.y : 0;
-    // Spawn the collision body at its natural RESTING height (origin sits ~ellipsoid.y above the
-    // ground). Spawning lower made the first move eject it upward — raising the camera. The
-    // visible mesh feet are re-planted on the ground each frame, so this doesn't look like a float.
+    // Spawn well BACK from the props (centred on the island), facing them, so the third-person
+    // camera frames the whole cluster. Try far→near and stop at the first point that's still on the
+    // island (so it doesn't spawn off a coastline bay).
+    const spawnX = islandCX;
+    let spawnZ = islandCZ + islandR * 0.4, groundY = 0;
+    for (let t = 0.85; t >= 0.25; t -= 0.05) {
+      const z = islandCZ + islandR * t;
+      const hit = scene.pickWithRay(
+        new BABYLON.Ray(new BABYLON.Vector3(spawnX, 5000, z), new BABYLON.Vector3(0, -1, 0), 10000),
+        m => m === groundMesh);
+      if (hit && hit.hit) { spawnZ = z; groundY = hit.pickedPoint.y; break; }
+    }
+    // Spawn the collision body at its natural RESTING height (origin sits ~ellipsoid.y above ground);
+    // the visible mesh feet are re-planted on the ground each frame, so this doesn't look like a float.
     tpCamera.position = new BABYLON.Vector3(spawnX, groundY + tpCamera.ellipsoid.y, spawnZ);
-    tpCamera.rotation.y = Math.PI;
+    tpCamera.rotation.y = Math.PI;   // face -Z, toward the props at the island centre
     spawnPoint = tpCamera.position.clone();   // remembered for respawn after falling off
     console.log('player spawned at', tpCamera.position.toString(), 'groundY:', groundY);
 
@@ -1447,6 +1469,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     addGroundPng('haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
     addGroundPng('route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
 
+    applyModeVisibility();   // game starts in overview → show the drawing-ground, hide the 3D scene
     onReady();
   }, null, (s, msg, err) => { console.error('Player GLB failed to load:', msg, err); onReady(); });
 
@@ -1501,6 +1524,7 @@ function switchToTP() {
   canvas.focus();
   document.getElementById('modeLabel').textContent = 'third person \u2014 arrows to move \u00b7 shift to sprint \u00b7 space to jump \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
+  applyModeVisibility();
 }
 
 function switchToIso() {
@@ -1514,6 +1538,33 @@ function switchToIso() {
   canvas.focus();
   document.getElementById('modeLabel').textContent = 'overview \u2014 left-drag to rotate \u00b7 right-drag to pan \u00b7 scroll to zoom';
   document.getElementById('toggleBtn').textContent = 'third person';
+  applyModeVisibility();
+}
+
+// In overview, swap the 3D terrain + prop posters for the flat drawing-ground (isoGround); the
+// character walks on it. In third person, show the real 3D scene.
+function applyModeVisibility() {
+  const iso = (mode === 'iso');
+  if (isoGround)  isoGround.setEnabled(iso);
+  if (groundMesh) groundMesh.setEnabled(!iso);
+  for (const wp of windPlanes) if (wp.pivot) wp.pivot.setEnabled(!iso);
+  // Character is larger in overview; feet offset scales with it so it stays planted.
+  if (tpMesh && charBaseS) {
+    const f = iso ? CHAR_ISO_SCALE : 1;
+    tpMesh.scaling.set(charBaseS * f, charBaseS * f, charBaseS * f);
+    tpFeetBaseY = charBaseFeetY * f;
+  }
+  if (iso) {
+    // Entering overview: save the third-person position, then stand the character on the drawing-ground
+    // centre (its 3D position is off the plane, so it would otherwise fall).
+    if (tpMesh) {
+      tpSavedPos = tpCamera.position.clone();
+      if (isoGround) tpCamera.position.set(islandCX, isoGround.position.y + tpCamera.ellipsoid.y, islandCZ);
+    }
+  } else if (tpMesh && tpSavedPos) {
+    // Back to third person → restore the far-back spawn / last 3D position (not the overview centre).
+    tpCamera.position.copyFrom(tpSavedPos);
+  }
 }
 
 document.getElementById('toggleBtn').addEventListener('click', () => {
@@ -1553,11 +1604,24 @@ function updateIsoKeys() {
     if (keys['ArrowUp'])    pan = pan.add(forward.scale( sp));
     if (keys['ArrowDown'])  pan = pan.add(forward.scale(-sp));
     if (!pan.equalsToFloats(0,0,0)) isoCamera.target = isoCamera.target.add(pan);
-  } else {
-    if (keys['ArrowLeft'])  isoCamera.alpha -= speed;
-    if (keys['ArrowRight']) isoCamera.alpha += speed;
-    if (keys['ArrowUp'])    isoCamera.beta = Math.max(isoCamera.lowerBetaLimit, isoCamera.beta - speed);
-    if (keys['ArrowDown'])  isoCamera.beta = Math.min(isoCamera.upperBetaLimit, isoCamera.beta + speed);
+  } else if (tpMesh) {
+    // Plain arrows / WASD move the CHARACTER, just like third person (iso camera stays put; mouse
+    // still controls it). Cameras have no moveWithCollisions, so move the body + ground-follow manually.
+    const turn = tpCamera.angularSpeed;
+    if (keys['ArrowLeft']  || keys['KeyA']) tpCamera.rotation.y -= turn;
+    if (keys['ArrowRight'] || keys['KeyD']) tpCamera.rotation.y += turn;
+    const fwd = (keys['ArrowUp'] || keys['KeyW']) ? 1 : (keys['ArrowDown'] || keys['KeyS']) ? -1 : 0;
+    const spd = (fwd > 0 && shift) ? WALK_SPEED * SPRINT_MULT : WALK_SPEED;
+    if (fwd) {
+      tpCamera.position.x += Math.sin(tpCamera.rotation.y) * fwd * spd;
+      tpCamera.position.z += Math.cos(tpCamera.rotation.y) * fwd * spd;
+    }
+    // Rest on the drawing-ground (the iso ground) or fall off its edge → fall-respawn recovers.
+    const gr = scene.pickWithRay(
+      new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), tpCamera.ellipsoid.y + 5000),
+      m => m === isoGround);
+    if (gr && gr.hit) tpCamera.position.y = gr.pickedPoint.y + tpCamera.ellipsoid.y;
+    else tpCamera.position.y -= GRAVITY_PER_FRAME;
   }
 }
 
@@ -1645,7 +1709,8 @@ engine.runRenderLoop(() => {
       // doesn't pop up at takeoff; it then rises/falls smoothly with the camera through the arc.
       tpMesh.position.y = tpFeetBaseY - tpCamera.ellipsoid.y;
     } else {
-      const fr = scene.pickWithRay(new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), 4000), m => m === groundMesh);
+      const g = (mode === 'iso' && isoGround) ? isoGround : groundMesh;   // walk on the drawing-ground in iso
+      const fr = scene.pickWithRay(new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), 4000), m => m === g);
       tpMesh.position.y = (fr && fr.hit) ? tpFeetBaseY - (tpCamera.position.y - fr.pickedPoint.y) : tpFeetBaseY;
     }
   }
