@@ -277,8 +277,8 @@ const GUST_WIDTH_MAX = 0.95;    // …wide = lingering pass
 // a gust across the sky, then coast off and away. Billboard PLANES (always face camera) so any
 // aspect renders cleanly (sprites clipped the wide one + showed edge artifacts).
 const FLOAT_PNGS     = [
-  { url: 'wind1.png', aspect: 262 / 198 },
-  { url: 'wind2.png', aspect: 551 / 169 },
+  { url: 'sceneAssets/wind1.png', aspect: 262 / 198 },
+  { url: 'sceneAssets/wind2.png', aspect: 551 / 169 },
 ];
 const STREAK_POOL    = 3;        // reusable streak planes (one streak rides each gust)
 const STREAK_SIZE    = 520;      // streak height in world units (width = × aspect)
@@ -299,10 +299,10 @@ const CROUCH_TRIGGER     = PLAYER_HEIGHT * 1.15;  // ceiling distance that trigg
 const CROUCH_ELLIPSOID_Y = PLAYER_HEIGHT * 0.42;  // ~84% of standing half-height
 const KINEMATIC_PLATFORMS = new Set(['stepladder', 'ladder', 'barn_second_floor']);
 // Jump / sprint
-const JUMP_VELOCITY = 7;                  // initial up impulse (raised with gravity → a bit quicker, ~same height)
-const JUMP_GRAVITY  = 0.30;               // jump arc gravity — quicker arc; apex hang keeps it floaty
-const JUMP_HANG_VEL  = 2.5;               // near the apex (|velY| < this) gravity eases off → hang time
-const JUMP_HANG_MULT = 0.40;              // gravity multiplier at the apex (lower = more hang)
+const JUMP_VELOCITY = 9.0;                // initial up impulse (raised with gravity → a bit quicker, ~same height)
+const JUMP_GRAVITY  = 0.70;               // jump arc gravity — quicker arc; apex hang keeps it floaty
+const JUMP_HANG_VEL  = 1.5;               // near the apex (|velY| < this) gravity eases off → hang time
+const JUMP_HANG_MULT = 0.65;              // gravity multiplier at the apex (lower = more hang)
 const JUMP_FALL_MULT = 1.35;              // fall a touch faster than the rise so landing isn't sluggish
 const JUMP_SMOOTH    = 0.20;              // applied vertical velocity eases toward target → no launch jerk
 const JUMP_CUSHION   = 32;                // cap descent speed only within this short zone of the floor
@@ -1080,7 +1080,6 @@ pumpkinMat.maxSimultaneousLights = 5;
 let windmillBlades    = null;
 let tpMesh            = null;
 let groundMesh        = null;
-let isoGround         = null;        // flat drawing-ground shown in overview mode
 let groundPhysicsBody = null;
 let isCrouching       = false;
 let barnMesh          = null;
@@ -1102,7 +1101,6 @@ let islandCX = 0, islandCZ = 0, islandR = 2000;   // blob centre + radius (set a
 let islandFloorY = -1e9;          // lowest terrain Y; below this the player has fallen off
 let fallTime = 0;                 // seconds the player has been below the terrain
 let spawnPoint = null;            // saved spawn position, for respawn after falling
-let tpSavedPos = null;            // third-person position, preserved across overview ↔ third-person switches
 const propLinks = [];   // { prop, url, opened } — touch a prop in third person → open its page once
 
 // Current gust event. Calm between gusts (strength 0). updateWind() schedules them; getWind()
@@ -1262,7 +1260,7 @@ const excludedCamMeshes = new Set();
 const keys = {};
 
 // ─── Load farm ────────────────────────────────────────────────────────────────
-BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_eb55eb0a5eaa4d039d9bb556cba04376.glb', scene, (meshes) => {
+BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_f1d9ec0294a841e180fe527933311c18.glb', scene, (meshes) => {
   console.log('farm GLB loaded, meshes:', meshes.length);
   for (const m of meshes) {
     if (m.name === 'ground_plane') { groundMesh = m; break; }
@@ -1503,22 +1501,6 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     islandR  = 0.5 * Math.max(gbb.maximumWorld.x - gbb.minimumWorld.x, gbb.maximumWorld.z - gbb.minimumWorld.z);
     islandFloorY = gbb.minimumWorld.y;   // anything well below this means the player fell off
 
-    // Overview "ground" — a flat horizontal plane showing the farm drawing. In iso mode this replaces
-    // the 3D terrain + props; the character walks on it (its surface is what the iso movement/feet
-    // re-seat onto). Fullbright so the line-art reads clearly from the overview angle.
-    const ASPECT = 3389 / 1894;
-    const isoW = islandR * 2.0;
-    const isoTex = new BABYLON.Texture('overview-scene.jpg', scene);
-    const isoMat = new BABYLON.StandardMaterial('isoGroundMat', scene);
-    isoMat.diffuseTexture = isoTex;
-    isoMat.emissiveTexture = isoTex; isoMat.emissiveColor = new BABYLON.Color3(1, 1, 1);
-    isoMat.specularColor = new BABYLON.Color3(0, 0, 0);
-    isoMat.disableLighting = true;
-    isoGround = BABYLON.MeshBuilder.CreateGround('isoGround', { width: isoW, height: isoW / ASPECT }, scene);
-    isoGround.material = isoMat;
-    isoGround.position.set(islandCX, (gbb.minimumWorld.y + gbb.maximumWorld.y) / 2, islandCZ);
-    isoGround.checkCollisions = true; isoGround.isPickable = true;
-    isoGround.setEnabled(false);   // off until overview mode
     // setupFloaters();   // wind-gust streak PNGs — disabled for now
   }
   console.log('checkpoint 3 - terrain smoothed, normals done');
@@ -1529,10 +1511,10 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
   sun.shadowMinZ = -dim * 2;
   sun.shadowMaxZ = dim * 2;
 
-  isoCamera.target = new BABYLON.Vector3(islandCX, isoGround.position.y, islandCZ);   // look at the drawing
-  isoCamera.alpha  = Math.PI * 1.75;   // orbit so the sketch reads upright (±π/2 to spin it 90°)
-  isoCamera.beta   = Math.PI / 3;      // looking down at the drawing
-  isoCamera.radius = islandR * 3.8;    // zoomed out so the whole drawing sits in frame
+  isoCamera.target = new BABYLON.Vector3(islandCX, groundMesh.getBoundingInfo().boundingBox.centerWorld.y, islandCZ);   // look at the 3D farm
+  isoCamera.alpha  = Math.PI * 1.75;   // orbit so the scene reads upright (±π/2 to spin it 90°)
+  isoCamera.beta   = Math.PI / 3;      // looking down at the farm
+  isoCamera.radius = islandR * 3.8;    // zoomed out so the whole island sits in frame
   _isoOrigPose = {
     target: isoCamera.target.clone(),
     alpha:  isoCamera.alpha,
@@ -1590,12 +1572,12 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     shadowGen.addShadowCaster(realMesh);
     tpMesh = realMesh;
 
-    // Spawn well BACK from the props (centred on the island), facing them, so the third-person
-    // camera frames the whole cluster. Try far→near and stop at the first point that's still on the
+    // Spawn close to the barn (island centre), facing it, kept well inside the coastline so the
+    // player doesn't start on an edge. Try farther→nearer and stop at the first point still on the
     // island (so it doesn't spawn off a coastline bay).
     const spawnX = islandCX;
-    let spawnZ = islandCZ + islandR * 0.4, groundY = 0;
-    for (let t = 0.85; t >= 0.25; t -= 0.05) {
+    let spawnZ = islandCZ + islandR * 0.25, groundY = 0;
+    for (let t = 0.45; t >= 0.15; t -= 0.05) {
       const z = islandCZ + islandR * t;
       const hit = scene.pickWithRay(
         new BABYLON.Ray(new BABYLON.Vector3(spawnX, 5000, z), new BABYLON.Vector3(0, -1, 0), 10000),
@@ -1614,10 +1596,10 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_e
     // facing +Z (toward the player's start), each slightly tilted about Z for dimensional variety.
     // Left/right: +X is the viewer's left (sketch left). If it reads mirrored, flip the X signs.
     const R = islandR * 0.55;   // spread — distance of props from centre (smaller = closer together)
-    const barnProp = addGroundPng('barn-silo.png', { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
-    const treeProp = addGroundPng('tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
-    addGroundPng('haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
-    addGroundPng('route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
+    const barnProp = addGroundPng('sceneAssets/barn-silo.png', { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0     });
+    const treeProp = addGroundPng('sceneAssets/tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03  });
+    addGroundPng('sceneAssets/haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04  });
+    addGroundPng('sceneAssets/route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025 });
     // Touch a prop (third person) → its page. newTab:true opens a new tab; false navigates this tab
     // (the barn "steps into" the barn-interior game — navigation is reliable, never popup-blocked).
     propLinks.push({ prop: treeProp, url: 'https://siennabroglie.wixsite.com/my-site-1/nonprofits', newTab: true, opened: false });
@@ -1676,6 +1658,10 @@ canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 function switchToTP() {
   mode = 'tp';
   isJumping = false; jumpVelY = 0; jumpLatched = false; tpCamera.applyGravity = true;
+  // Always re-enter at the spawn: reset position and camera angle (face the barn, level pitch).
+  if (spawnPoint) tpCamera.position.copyFrom(spawnPoint);
+  tpCamera.rotation.set(0, Math.PI, 0);
+  if (tpCamera.cameraRotation) tpCamera.cameraRotation.copyFromFloats(0, 0);
   isoCamera.detachControl();
   while (scene.activeCameras.length) scene.activeCameras.pop();
   scene.activeCameras.push(tpCamera);
@@ -1703,29 +1689,17 @@ function switchToIso() {
   applyModeVisibility();
 }
 
-// In overview, swap the 3D terrain + prop posters for the flat drawing-ground (isoGround); the
-// character walks on it. In third person, show the real 3D scene.
+// The real 3D scene (ground + prop posters) is shown in both modes; overview just views it
+// from the iso camera. The character keeps its position across the switch.
 function applyModeVisibility() {
   const iso = (mode === 'iso');
-  if (isoGround)  isoGround.setEnabled(iso);
-  if (groundMesh) groundMesh.setEnabled(!iso);
-  for (const wp of windPlanes) if (wp.pivot) wp.pivot.setEnabled(!iso);
+  if (groundMesh) groundMesh.setEnabled(true);
+  for (const wp of windPlanes) if (wp.pivot) wp.pivot.setEnabled(true);
   // Character is larger in overview; feet offset scales with it so it stays planted.
   if (tpMesh && charBaseS) {
     const f = iso ? CHAR_ISO_SCALE : 1;
     tpMesh.scaling.set(charBaseS * f, charBaseS * f, charBaseS * f);
     tpFeetBaseY = charBaseFeetY * f;
-  }
-  if (iso) {
-    // Entering overview: save the third-person position, then stand the character on the drawing-ground
-    // centre (its 3D position is off the plane, so it would otherwise fall).
-    if (tpMesh) {
-      tpSavedPos = tpCamera.position.clone();
-      if (isoGround) tpCamera.position.set(islandCX, isoGround.position.y + tpCamera.ellipsoid.y, islandCZ);
-    }
-  } else if (tpMesh && tpSavedPos) {
-    // Back to third person → restore the far-back spawn / last 3D position (not the overview centre).
-    tpCamera.position.copyFrom(tpSavedPos);
   }
 }
 
@@ -1778,10 +1752,10 @@ function updateIsoKeys() {
       tpCamera.position.x += Math.sin(tpCamera.rotation.y) * fwd * spd;
       tpCamera.position.z += Math.cos(tpCamera.rotation.y) * fwd * spd;
     }
-    // Rest on the drawing-ground (the iso ground) or fall off its edge → fall-respawn recovers.
+    // Rest on the real 3D ground or fall off its edge → fall-respawn recovers.
     const gr = scene.pickWithRay(
       new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), tpCamera.ellipsoid.y + 5000),
-      m => m === isoGround);
+      m => m === groundMesh);
     if (gr && gr.hit) tpCamera.position.y = gr.pickedPoint.y + tpCamera.ellipsoid.y;
     else tpCamera.position.y -= GRAVITY_PER_FRAME;
   }
@@ -1871,7 +1845,7 @@ engine.runRenderLoop(() => {
       // doesn't pop up at takeoff; it then rises/falls smoothly with the camera through the arc.
       tpMesh.position.y = tpFeetBaseY - tpCamera.ellipsoid.y;
     } else {
-      const g = (mode === 'iso' && isoGround) ? isoGround : groundMesh;   // walk on the drawing-ground in iso
+      const g = groundMesh;   // walk on the real 3D ground in both modes
       const fr = scene.pickWithRay(new BABYLON.Ray(tpCamera.position, BABYLON.Vector3.Down(), 4000), m => m === g);
       tpMesh.position.y = (fr && fr.hit) ? tpFeetBaseY - (tpCamera.position.y - fr.pickedPoint.y) : tpFeetBaseY;
     }
