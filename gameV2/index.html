@@ -117,11 +117,21 @@
     100% { transform: scaleX(var(--wind-flip,1)) translate(-1.6vw, -1.6vh) rotate(calc(var(--wind-rot,0deg) - 3deg)); }
   }
   @keyframes windFade    { 0%{opacity:0} 18%{opacity:var(--wind-op,0.8)} 78%{opacity:var(--wind-op,0.8)} 100%{opacity:0} }
+  /* safeSecure photo popup — a 50% black film over the screen with a responsive grid of photos.
+     Click the film (anywhere but a photo) to close; click a photo to follow its link. */
+  #photo-popup { position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 70; display: none; align-items: center; justify-content: center;
+    cursor: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20width='44'%20height='44'%20viewBox='0%200%2044%2044'%3E%3Ccircle%20cx='22'%20cy='22'%20r='20'%20fill='black'%20fill-opacity='0.55'%20stroke='white'%20stroke-width='2'/%3E%3Cpolygon%20points='17,14%2017,30%2031,22'%20fill='white'/%3E%3C/svg%3E") 22 22, pointer; }
+  #photo-popup.open { display: flex; }
+  #photo-popup .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 18px;
+    width: min(86vw, 1100px); max-height: 86vh; overflow: auto; padding: 28px; box-sizing: border-box; }
+  #photo-popup .grid img { width: 100%; height: auto; display: block; cursor: inherit; transition: transform 0.12s ease; }
+  #photo-popup .grid img:hover { transform: scale(1.03); }
 </style>
 </head>
 <body>
 <canvas id="renderCanvas" tabindex="1"></canvas>
 <div id="wind-overlay"></div>
+<div id="photo-popup"><div class="grid"></div></div>
 <div id="loading"><span>building farm&hellip;</span><div id="loadingBar"></div></div>
 <div id="modeLabel">overview &mdash; left-drag to rotate &middot; right-drag to pan &middot; scroll to zoom</div>
 <div id="click-catcher"></div>
@@ -1199,6 +1209,103 @@ function flashWindOverlay(peak) {
   }
 }
 
+// ── safeSecure photo popup ───────────────────────────────────────────────────────
+// A 50% black film over the screen showing the safeSecure/ images. They first appear in a
+// responsive grid, hold still briefly, then suddenly start floating and bouncing off the screen
+// edges like pong balls. Opened by clicking the haystack's orange fill (see the pointer handler).
+// Clicking the film (anywhere but a photo) closes it; clicking a photo follows its link.
+// NOTE: this is a static site (no directory listing) — add/remove images here by hand.
+const PHOTO_POPUP_EL = document.getElementById('photo-popup');
+const PHOTO_GRID_EL  = PHOTO_POPUP_EL ? PHOTO_POPUP_EL.querySelector('.grid') : null;
+const SAFE_SECURE = [
+  { img: 'Screen Shot 2026-06-17 at 9.20.02 PM.png', url: null },   // TODO: set per-photo URLs
+  { img: 'Screen Shot 2026-06-17 at 9.21.33 PM.png', url: null },
+  { img: 'Screen Shot 2026-06-17 at 9.24.00 PM.png', url: null },
+  { img: 'Screen Shot 2026-06-17 at 9.26.24 PM.png', url: null },
+  { img: 'Screen Shot 2026-06-17 at 9.27.49 PM.png', url: null },
+];
+const PHOTO_FLOAT_DELAY = 600;    // ms the grid holds still before the float begins
+const PHOTO_FLOAT_RAMP  = 3500;   // ms to ease the motion in (cubic) so it starts almost undetectable
+const photoImgs  = [];            // the <img> elements
+const photoFloat = { raf: 0, timer: 0, items: [], last: 0, elapsed: 0 };
+
+(function buildPhotoGrid() {
+  if (!PHOTO_GRID_EL) return;
+  SAFE_SECURE.forEach((p) => {
+    const im = document.createElement('img');
+    im.src = 'safeSecure/' + encodeURIComponent(p.img);   // filenames have spaces → encode
+    im.alt = ''; im.draggable = false;
+    im.addEventListener('click', (e) => {                 // a photo follows its link, never closes
+      e.stopPropagation();
+      if (p.url) window.open(p.url, '_blank');
+    });
+    PHOTO_GRID_EL.appendChild(im);
+    photoImgs.push(im);
+  });
+  PHOTO_POPUP_EL.addEventListener('click', closePhotoPopup);   // film (anywhere but a photo) closes
+})();
+
+function openPhotoPopup() {
+  if (!PHOTO_POPUP_EL) return;
+  resetPhotoFloat();                                          // back into the grid, still
+  PHOTO_POPUP_EL.classList.add('open');
+  photoFloat.timer = setTimeout(releasePhotoFloat, PHOTO_FLOAT_DELAY);  // grid holds, then the motion eases in
+}
+function closePhotoPopup() {
+  if (!PHOTO_POPUP_EL) return;
+  PHOTO_POPUP_EL.classList.remove('open');
+  resetPhotoFloat();
+}
+function resetPhotoFloat() {
+  if (photoFloat.timer) { clearTimeout(photoFloat.timer); photoFloat.timer = 0; }
+  if (photoFloat.raf)   { cancelAnimationFrame(photoFloat.raf); photoFloat.raf = 0; }
+  photoFloat.items = [];
+  for (const im of photoImgs) {                               // return to grid flow
+    im.style.position = ''; im.style.left = ''; im.style.top = '';
+    im.style.width = ''; im.style.height = ''; im.style.margin = '';
+  }
+}
+function releasePhotoFloat() {
+  photoFloat.timer = 0;
+  if (!photoImgs.length) return;
+  const rects = photoImgs.map((im) => im.getBoundingClientRect());   // measure all first (avoid reflow mid-loop)
+  photoFloat.items = photoImgs.map((im, i) => {
+    const r = rects[i];
+    const ang = Math.random() * Math.PI * 2;
+    const spd = 130 + Math.random() * 90;                    // px/sec — pong speed, varied per image
+    im.style.position = 'fixed';
+    im.style.left = r.left + 'px'; im.style.top = r.top + 'px';
+    im.style.width = r.width + 'px'; im.style.height = r.height + 'px'; im.style.margin = '0';
+    return { el: im, x: r.left, y: r.top, w: r.width, h: r.height, vx: Math.cos(ang) * spd, vy: Math.sin(ang) * spd };
+  });
+  photoFloat.last = 0; photoFloat.elapsed = 0;
+  photoFloat.raf = requestAnimationFrame(stepPhotoFloat);
+}
+function stepPhotoFloat(now) {
+  const f = photoFloat;
+  const dt = f.last ? Math.min(0.05, (now - f.last) / 1000) : 0;
+  f.last = now;
+  f.elapsed += dt;
+  const u = Math.min(1, f.elapsed / (PHOTO_FLOAT_RAMP / 1000));
+  const ramp = u * u * u;   // cubic ease-in: motion is almost undetectable at first, then accelerates
+  const vw = window.innerWidth, vh = window.innerHeight;
+  for (const it of f.items) {
+    it.x += it.vx * ramp * dt; it.y += it.vy * ramp * dt;
+    if (it.x <= 0)              { it.x = 0;          it.vx =  Math.abs(it.vx); }   // bounce off edges
+    else if (it.x + it.w >= vw) { it.x = vw - it.w;  it.vx = -Math.abs(it.vx); }
+    if (it.y <= 0)              { it.y = 0;          it.vy =  Math.abs(it.vy); }
+    else if (it.y + it.h >= vh) { it.y = vh - it.h;  it.vy = -Math.abs(it.vy); }
+    it.el.style.left = it.x + 'px'; it.el.style.top = it.y + 'px';
+  }
+  f.raf = requestAnimationFrame(stepPhotoFloat);
+}
+// Esc also closes (capture phase, so it pre-empts the game's Esc → overview handler).
+document.addEventListener('keydown', (e) => {
+  if (e.code === 'Escape' && PHOTO_POPUP_EL && PHOTO_POPUP_EL.classList.contains('open')) {
+    closePhotoPopup(); e.stopImmediatePropagation(); e.preventDefault();
+  }
+}, true);
+
 // A vertical PNG plane, base at the local origin (Y 0..H), subdivided segsX×segsY so the surface
 // can wave: 'bend' (segsX=1) waves the top; 'paper' (full grid) ripples out-of-plane like paper.
 function buildVerticalPlane(name, W, H, segsX, segsY) {
@@ -1746,7 +1853,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_f
       fill: 'sceneAssets/barn-silo-fill.png' });
     const treeProp = addGroundPng('sceneAssets/tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03,
       fill: 'sceneAssets/tree-tractor-fill.png' });
-    addGroundPng('sceneAssets/haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04,
+    const haystackProp = addGroundPng('sceneAssets/haystack.png', { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04,
       fill: 'sceneAssets/haystack-fill.png' });
     addGroundPng('sceneAssets/route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025,
       fill: 'sceneAssets/route-cellar-fill.png' });
@@ -1761,6 +1868,7 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_f
     // the UV it hit to whichever spot's box (in fill-image UV) contains it. box = [u0,v0,u1,v1].
     // Set url: null to leave a spot unlinked (placeholder). Re-run gen/repaint won't change these.
     const barnGlow = findGlow(barnProp);
+    const haystackGlow = findGlow(haystackProp);   // haystack fill opens the safeSecure photo popup
     const barnSpots = [
       { name: 'doors',         box: [0.57, 0.68, 0.78, 0.99], url: 'https://www.youtube.com/@borg22222/featured', newTab: true },
       { name: 'cupola',        box: [0.32, 0.06, 0.49, 0.24], url: null, newTab: true },   // TODO: set URL
@@ -1789,6 +1897,11 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_f
         if (!uv) return;
         const spot = resolveBarnSpot(uv.x, uv.y);
         if (spot) openLink(spot.url, spot.newTab);
+        return;
+      }
+      if (picked === haystackProp) {                   // haystack fill → safeSecure photo popup
+        if (haystackGlow && haystackGlow.glowAmt < 0.05) return;   // only while the fill is lit
+        openPhotoPopup();
         return;
       }
       const L = propLinks.find(l => l.prop === picked);   // whole-prop links
