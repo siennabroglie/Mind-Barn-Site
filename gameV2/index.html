@@ -289,8 +289,8 @@ const LEAN_GAIN      = 0.10;    // 'lean' tip angle per unit wind strength (radi
 const BEND_GAIN      = 0.16;    // 'bend' top displacement fraction per unit wind strength
 const PAPER_AMP      = 0.06;    // 'paper' out-of-plane ripple depth (fraction of width) per unit wind
 // Region glow ramp — props' hotspots fade in as the player nears (full ≤ NEAR, off ≥ FAR).
-const GLOW_NEAR      = 320;     // world units: fully glowing at/inside this distance
-const GLOW_FAR       = 1250;    // world units: no glow at/beyond this distance (starts early on approach)
+const GLOW_NEAR      = 220;     // world units: fully glowing at/inside this distance
+const GLOW_FAR       = 700;     // world units: no glow at/beyond this distance (starts early on approach)
 // Auto-crouch: if an upward ray hits a ceiling closer than CROUCH_TRIGGER,
 // shrink the ellipsoid to CROUCH_ELLIPSOID_Y (half-height when crouched).
 // CROUCH_TRIGGER should be a little larger than PLAYER_HEIGHT so the player
@@ -1171,69 +1171,69 @@ function buildVerticalPlane(name, W, H, segsX, segsY) {
   return mesh;
 }
 
-// ── Region glow plugin ────────────────────────────────────────────────────────
-// Adds an orange glow to selected UV "hotspot" ellipses of a poster's StandardMaterial,
-// confined to the drawn (opaque) pixels. Driven per-frame by uGlowAmt (proximity 0..1)
-// and uTime (a gentle pulse that sweeps region→region via per-spot phase).
-const GLOW_MAX_SPOTS = 6;
+// ── Coloring-book fill plugin ──────────────────────────────────────────────────
+// Reveals a pre-painted orange "fill" texture over a poster's StandardMaterial as the
+// player nears. The fill PNG (see gameV2/tools/gen_fills.py) is flat orange between the
+// pencil lines and transparent on the strokes, so the drawing "colours in" while the lines
+// still show on top. Driven per-frame by uGlowAmt (proximity 0..1) and uTime (subtle pulse).
 class GlowSpotsPlugin extends BABYLON.MaterialPluginBase {
   constructor(material) {
     super(material, 'GlowSpots', 200, { GLOWSPOTS: false });
     this.glowAmt = 0;
     this.time = 0;
-    this.pulseSpeed = 2.4;
-    this.aspect = 1;
-    this.color = new BABYLON.Color3(1.0, 0.42, 0.04);
-    this.spots = [];                       // [{ cx, cy, r, phase }] in UV space (max GLOW_MAX_SPOTS)
+    this.pulseSpeed = 0.7;                  // slow base rate for the irregular fill pulse
+    this.color = new BABYLON.Color3(1.0, 0.33, 0.0);   // fill colour (#ff5400); the fill PNG supplies only the mask
+    this.shineGain = 0.7;                   // strength of the travelling shine (0 = off)
+    this.fillTexture = null;                // BABYLON.Texture: the painted fill-layer (alpha = where to colour)
     this._enable(true);
   }
   getClassName() { return 'GlowSpotsPlugin'; }
   prepareDefines(defines) { defines.GLOWSPOTS = true; }
+  getSamplers(samplers) { samplers.push('uFillSampler'); }
   getUniforms() {
-    // Each spot is its OWN vec4 uniform (uSpot0..uSpot5) — array uniforms bind as uniform1fv on
-    // some WebGL drivers ("Uniform size does not match uniform method"), individual vec4s don't.
-    const ubo = [
-      { name: 'uGlowAmt',    size: 1, type: 'float' },
-      { name: 'uTime',       size: 1, type: 'float' },
-      { name: 'uPulseSpeed', size: 1, type: 'float' },
-      { name: 'uAspect',     size: 1, type: 'float' },
-      { name: 'uGlowColor',  size: 3, type: 'vec3'  },
-    ];
-    let decl = `#ifdef GLOWSPOTS
-      uniform float uGlowAmt; uniform float uTime; uniform float uPulseSpeed; uniform float uAspect;
-      uniform vec3 uGlowColor;\n`;
-    for (let i = 0; i < GLOW_MAX_SPOTS; i++) {
-      ubo.push({ name: 'uSpot' + i, size: 4, type: 'vec4' });
-      decl += `      uniform vec4 uSpot${i};\n`;
-    }
-    decl += `    #endif`;
-    return { ubo, fragment: decl };
+    return {
+      ubo: [
+        { name: 'uGlowAmt',    size: 1, type: 'float' },
+        { name: 'uTime',       size: 1, type: 'float' },
+        { name: 'uPulseSpeed', size: 1, type: 'float' },
+        { name: 'uShineGain',  size: 1, type: 'float' },
+        { name: 'uGlowColor',  size: 3, type: 'vec3'  },
+      ],
+      fragment: `#ifdef GLOWSPOTS
+        uniform float uGlowAmt; uniform float uTime; uniform float uPulseSpeed; uniform float uShineGain; uniform vec3 uGlowColor;
+      #endif`,
+    };
   }
   getCustomCode(shaderType) {
     if (shaderType !== 'fragment') return null;
-    // Inline each spot (no helper function — keeps the uniforms in scope; arrays/functions hit
-    // driver-specific issues). radius<=0 contributes nothing, so unused spots are inert.
-    let acc = '';
-    for (let i = 0; i < GLOW_MAX_SPOTS; i++) acc += `
-          { vec2 dd = vec2((guv.x - uSpot${i}.x) * uAspect, guv.y - uSpot${i}.y);
-            float d = length(dd) / max(uSpot${i}.z, 0.0001);
-            float fall = 1.0 - smoothstep(0.55, 1.0, d);
-            float pulse = 0.5 + 0.5 * sin(uTime * uPulseSpeed - uSpot${i}.w);
-            gm = max(gm, fall * (0.55 + 0.45 * pulse)); }`;
     return {
+      // Sampler must be declared here (definitions block) — Babylon does not emit it from
+      // getUniforms().fragment, which left uFillSampler undeclared at the texture2D call.
+      CUSTOM_FRAGMENT_DEFINITIONS: `#ifdef GLOWSPOTS
+        uniform sampler2D uFillSampler;
+      #endif`,
       CUSTOM_FRAGMENT_BEFORE_FRAGCOLOR: `#ifdef GLOWSPOTS
         if (uGlowAmt > 0.001) {
           #ifdef MAINUV1
-            vec2 guv = vMainUV1;
+            vec2 fuv = vMainUV1;
           #else
-            vec2 guv = vDiffuseUV;
+            vec2 fuv = vDiffuseUV;
           #endif
-          float gm = 0.0;${acc}
-          float g = gm * uGlowAmt;
-          // Strong orange on the inked pixels, plus a soft orange wash over the region so it
-          // reads as a clear highlight (lift alpha so the patch shows over the blank paper too).
-          color.rgb += uGlowColor * g * (0.6 + 0.9 * color.a);
-          color.a = max(color.a, g * 0.5);
+          vec4 fillSample = texture2D(uFillSampler, fuv);
+          // The fill PNG supplies only a mask (its alpha = where to colour); the colour comes
+          // from uGlowColor. Slow, irregular pulse — two non-harmonic sines so the timing varies
+          // rather than ticking on a steady beat.
+          float pulse  = 0.5 + 0.25 * sin(uTime * uPulseSpeed) + 0.25 * sin(uTime * uPulseSpeed * 0.61 + 1.7);
+          // Cap the fill well below solid so it stays translucent; its opacity hovers within the
+          // pulse band instead of reaching full opacity.
+          float reveal = uGlowAmt * (0.42 + 0.18 * pulse);
+          color.rgb = mix(color.rgb, uGlowColor, fillSample.a * reveal);
+          // Shine: a steady white glow over the whole painted region, strong while the fill is
+          // still faint (far away) and fading to nothing as the fill solidifies (close).
+          // (1.0 - reveal) ties it inversely to fill opacity; fadeIn softens the far-edge pop.
+          float fadeIn = smoothstep(0.0, 0.15, uGlowAmt);
+          float shine  = fillSample.a * (1.0 - reveal) * fadeIn * uShineGain;
+          color.rgb += vec3(1.0) * shine;   // pure white, unsaturated — matches the scene light
         }
       #endif`,
     };
@@ -1242,20 +1242,16 @@ class GlowSpotsPlugin extends BABYLON.MaterialPluginBase {
     uniformBuffer.updateFloat('uGlowAmt', this.glowAmt);
     uniformBuffer.updateFloat('uTime', this.time);
     uniformBuffer.updateFloat('uPulseSpeed', this.pulseSpeed);
-    uniformBuffer.updateFloat('uAspect', this.aspect);
+    uniformBuffer.updateFloat('uShineGain', this.shineGain);
     uniformBuffer.updateColor3('uGlowColor', this.color);
-    for (let i = 0; i < GLOW_MAX_SPOTS; i++) {
-      const s = this.spots[i];
-      if (s) uniformBuffer.updateFloat4('uSpot' + i, s.cx, s.cy, s.r, s.phase);
-      else   uniformBuffer.updateFloat4('uSpot' + i, 0, 0, 0, 0);
-    }
+    if (this.fillTexture) uniformBuffer.setTexture('uFillSampler', this.fillTexture);
   }
 }
 
 // Create a ground PNG poster that sways in the wind. style 'lean' (rigid tip about the base) or
 // 'bend' (foliage-like top wave). Seats its base on the terrain at (x,z) and registers for sway.
 function addGroundPng(url, opts) {
-  const { x, z, height, aspect, style, tilt = 0, glowSpots = [] } = opts;   // tilt = static lean about local Z (radians)
+  const { x, z, height, aspect, style, tilt = 0, fill = null } = opts;   // tilt = static lean about local Z (radians); fill = orange coloring-book layer
   const W = height * aspect, H = height;
 
   const tex = new BABYLON.Texture(url, scene, false, true, undefined, null,
@@ -1269,10 +1265,15 @@ function addGroundPng(url, opts) {
   mat.transparencyMode = BABYLON.Material.MATERIAL_ALPHABLEND;
   shadowGen.transparencyShadow = true;   // alpha cutout casts a shaped shadow
 
-  // Orange region-glow: each spot is [u, v, radius] in UV space; the pulse sweeps by index.
-  const glow = new GlowSpotsPlugin(mat);
-  glow.aspect = aspect;
-  glow.spots = glowSpots.map((s, i) => ({ cx: s[0], cy: s[1], r: s[2], phase: i * 1.3 }));
+  // Coloring-book fill: reveal a pre-painted orange layer (gen_fills.py) as the player nears.
+  let glow = null;
+  if (fill) {
+    const fillTex = new BABYLON.Texture(fill, scene, false, true, undefined, null,
+      () => console.warn('fill PNG failed to load:', fill));
+    fillTex.hasAlpha = true;
+    glow = new GlowSpotsPlugin(mat);
+    glow.fillTexture = fillTex;
+  }
 
   const ray = new BABYLON.Ray(new BABYLON.Vector3(x, 5000, z), new BABYLON.Vector3(0, -1, 0), 10000);
   const hit = scene.pickWithRay(ray, m => m === groundMesh);
@@ -1687,26 +1688,62 @@ BABYLON.SceneLoader.ImportMesh('', 'https://static.wixstatic.com/3d/', '863c39_f
     // facing +Z (toward the player's start), each slightly tilted about Z for dimensional variety.
     // Left/right: +X is the viewer's left (sketch left). If it reads mirrored, flip the X signs.
     const R = islandR * 0.55;   // spread — distance of props from centre (smaller = closer together)
+    // Orange coloring-book fills are pre-painted by gameV2/tools/gen_fills.py (barn = its 4
+    // feature regions; the rest fill whole). Re-run that script after editing the source art.
     const barnProp = addGroundPng('sceneAssets/barn-silo.png', { x: islandCX,          z: islandCZ,          height: 320, aspect: 1891 / 1316, style: 'paper', tilt:  0,
-      glowSpots: [[0.63, 0.12, 0.10], [0.66, 0.62, 0.07], [0.34, 0.82, 0.07], [0.86, 0.85, 0.08]] });   // main doors, hayloft window, cupola, silo dome
+      fill: 'sceneAssets/barn-silo-fill.png' });
     const treeProp = addGroundPng('sceneAssets/tree-tractor.png', { x: islandCX + 0.35*R, z: islandCZ + 0.18*R, height: 340, aspect: 1086 / 1384, style: 'paper', tilt:  0.03,
-      glowSpots: [[0.34, 0.12, 0.12], [0.45, 0.75, 0.12], [0.72, 0.66, 0.10]] });   // tractor, two canopy clusters
+      fill: 'sceneAssets/tree-tractor-fill.png' });
     addGroundPng('sceneAssets/haystack.png',     { x: islandCX - 0.30*R, z: islandCZ - 0.12*R, height: 120, aspect: 393 / 387,   style: 'paper', tilt: -0.04,
-      glowSpots: [[0.55, 0.85, 0.14], [0.45, 0.40, 0.18]] });   // peak, body
+      fill: 'sceneAssets/haystack-fill.png' });
     addGroundPng('sceneAssets/route-cellar.png', { x: islandCX - 0.40*R, z: islandCZ + 0.25*R, height: 100, aspect: 746 / 304,   style: 'paper', tilt:  0.025,
-      glowSpots: [[0.32, 0.45, 0.16], [0.78, 0.55, 0.12]] });   // cellar door, right structure
-    // Prop links DISABLED for now — touching a prop no longer opens its page.
-    // To restore: re-enable the propLinks pushes + tpCamera.onCollide handler below.
-    // propLinks.push({ prop: treeProp, url: 'https://siennabroglie.wixsite.com/my-site-1/nonprofits', newTab: true, opened: false });
-    // propLinks.push({ prop: barnProp, url: 'https://siennabroglie.github.io/Mind-Barn-Site/game-barnInterior/index.html', newTab: false, opened: false });
-    // tpCamera.onCollide = (collided) => {
-    //   for (const L of propLinks) {
-    //     if (collided === L.prop && !L.opened) {
-    //       L.opened = true;
-    //       if (L.newTab) window.open(L.url, '_blank'); else window.location.href = L.url;
-    //     }
-    //   }
-    // };
+      fill: 'sceneAssets/route-cellar-fill.png' });
+    // Prop links — tied to the fill layer and triggered by CLICK only (the old proximity/collision
+    // trigger is gone). A prop is clickable only while its orange fill is showing (player near
+    // enough that glowAmt is up); clicking elsewhere or on an unlit prop does nothing.
+    const findGlow = (prop) => { const wp = windPlanes.find(w => w.mesh === prop); return wp ? wp.glow : null; };
+    // Whole-prop links (one mesh → one URL).
+    propLinks.push({ prop: treeProp, glow: findGlow(treeProp), url: 'https://siennabroglie.wixsite.com/my-site-1/nonprofits', newTab: true });
+
+    // Barn — each painted fill spot is its own linked object. A click on the barn is routed by
+    // the UV it hit to whichever spot's box (in fill-image UV) contains it. box = [u0,v0,u1,v1].
+    // Set url: null to leave a spot unlinked (placeholder). Re-run gen/repaint won't change these.
+    const barnGlow = findGlow(barnProp);
+    const barnSpots = [
+      { name: 'doors',         box: [0.57, 0.68, 0.78, 0.99], url: 'https://www.youtube.com/@borg22222/featured', newTab: true },
+      { name: 'cupola',        box: [0.32, 0.06, 0.49, 0.24], url: null, newTab: true },   // TODO: set URL
+      { name: 'rightWindow',   box: [0.74, 0.29, 0.84, 0.46], url: null, newTab: true },   // TODO: set URL
+      { name: 'leanToWindows', box: [0.01, 0.70, 0.21, 0.84], url: null, newTab: true },   // TODO: set URL
+    ];
+    const openLink = (url, newTab) => { if (!url) return; if (newTab) window.open(url, '_blank'); else window.location.href = url; };
+    const resolveBarnSpot = (u, v) => {
+      // Try the UV and its flips so this is robust to the texture's invertY / view-side mirroring;
+      // the barn's spots are small and far apart, so a flipped coord never lands in the wrong box.
+      const cands = [[u, v], [u, 1 - v], [1 - u, v], [1 - u, 1 - v]];
+      for (const [cu, cv] of cands) {
+        const s = barnSpots.find(s => cu >= s.box[0] && cu <= s.box[2] && cv >= s.box[1] && cv <= s.box[3]);
+        if (s) return s;
+      }
+      return null;
+    };
+
+    scene.onPointerObservable.add((pi) => {
+      if (pi.type !== BABYLON.PointerEventTypes.POINTERTAP) return;   // a click/tap (not a drag-rotate)
+      const info = pi.pickInfo; const picked = info && info.pickedMesh;
+      if (!picked) return;
+      if (picked === barnProp) {                       // per-spot routing
+        if (barnGlow && barnGlow.glowAmt < 0.05) return;   // only while the fill is lit
+        const uv = info.getTextureCoordinates ? info.getTextureCoordinates() : null;
+        if (!uv) return;
+        const spot = resolveBarnSpot(uv.x, uv.y);
+        if (spot) openLink(spot.url, spot.newTab);
+        return;
+      }
+      const L = propLinks.find(l => l.prop === picked);   // whole-prop links
+      if (!L) return;
+      if (L.glow && L.glow.glowAmt < 0.05) return;
+      openLink(L.url, L.newTab);
+    });
 
     applyModeVisibility();   // game starts in overview → show the drawing-ground, hide the 3D scene
     onReady();
