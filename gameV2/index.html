@@ -2083,18 +2083,35 @@ function setTouchControls(show) {
 }
 
 (function setupTouchControls() {
-  const ARROW_KEYS = { arrowUp: 'ArrowUp', arrowLeft: 'ArrowLeft', arrowRight: 'ArrowRight' };
+  // Each arrow drives BOTH the global `keys` (overview movement + sprint/jump checks)
+  // AND the third-person walk input's raw keyCode list: in third person, walking/
+  // turning is handled by FreeCameraKeyboardWalkInput, which tracks keyCodes in its
+  // own _keys array, not the `keys` object. Synthetic key events can't reliably carry
+  // keyCode, so we poke that array directly.
+  const ARROW_KEYS = {
+    arrowUp:    { code: 'ArrowUp',    kc: 38 },
+    arrowLeft:  { code: 'ArrowLeft',  kc: 37 },
+    arrowRight: { code: 'ArrowRight', kc: 39 },
+  };
+  const walkInput = () => tpCamera.inputs.attached && tpCamera.inputs.attached.keyboard;
   Object.keys(ARROW_KEYS).forEach(id => {
     const el = document.getElementById(id);
     if (!el) return;
-    const code = ARROW_KEYS[id];
+    const code = ARROW_KEYS[id].code, kc = ARROW_KEYS[id].kc;
     const press = (e) => {
       e.preventDefault();
       keys[code] = true;
+      const w = walkInput();
+      if (w && w._keys.indexOf(kc) === -1) w._keys.push(kc);
       el.classList.add('active');
       if (e.pointerId != null && el.setPointerCapture) { try { el.setPointerCapture(e.pointerId); } catch (_) {} }
     };
-    const release = () => { keys[code] = false; el.classList.remove('active'); };
+    const release = () => {
+      keys[code] = false;
+      const w = walkInput();
+      if (w) { const i = w._keys.indexOf(kc); if (i >= 0) w._keys.splice(i, 1); }
+      el.classList.remove('active');
+    };
     el.addEventListener('pointerdown',  press);
     el.addEventListener('pointerup',    release);
     el.addEventListener('pointercancel', release);
