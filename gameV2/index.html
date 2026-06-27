@@ -39,6 +39,32 @@
   }
   .btn:hover { background: rgba(255,255,255,0.16); border-color: #fff; }
 
+  /* Mobile third-person touch arrows — hand-drawn white glyphs fanned above the
+     overview button. Forward (up) + turn left/right; jump is a double-tap on the
+     scene. Hidden by default; shown only on mobile in third-person (via JS).      */
+  #touchControls {
+    position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%);
+    width: 240px; height: 124px; z-index: 11;
+    pointer-events: none;          /* container ignores taps; arrows re-enable */
+    display: none;
+  }
+  .tarrow {
+    position: absolute; width: 74px; height: 74px;
+    pointer-events: auto; touch-action: none; cursor: pointer;
+    opacity: 0.95; -webkit-tap-highlight-color: transparent;
+    transition: transform 0.08s ease, opacity 0.08s ease;
+  }
+  .tarrow svg { width: 100%; height: 100%; display: block; }
+  .tarrow path {
+    fill: none; stroke: #fff; stroke-width: 5;
+    stroke-linecap: round; stroke-linejoin: round;
+    filter: drop-shadow(0 1px 3px rgba(0,0,0,0.65));   /* legible over the white barn */
+  }
+  .tarrow.active { transform: scale(0.85); opacity: 1; }
+  #arrowUp    { top: 0;    left: 83px; }   /* center, highest */
+  #arrowLeft  { top: 50px; left: 16px; }   /* lower-left */
+  #arrowRight { top: 50px; left: 150px; }  /* lower-right */
+
   #loading {
     position: absolute; inset: 0; background: #000;
     display: flex; flex-direction: column;
@@ -182,6 +208,30 @@
     <div class="note">press <kbd>H</kbd> or click to close</div>
   </div>
 </div>
+<!-- Mobile third-person movement arrows (forward / turn left / turn right). Jump = double-tap. -->
+<div id="touchControls">
+  <div class="tarrow" id="arrowUp" aria-label="forward">
+    <svg viewBox="0 0 80 80">
+      <path d="M40,66 Q41,40 40,15"/>
+      <path d="M25,33 Q33,21 40,15"/>
+      <path d="M55,33 Q47,21 40,15"/>
+    </svg>
+  </div>
+  <div class="tarrow" id="arrowLeft" aria-label="turn left">
+    <svg viewBox="0 0 80 80">
+      <path d="M65,40 Q40,41 15,40"/>
+      <path d="M33,25 Q21,33 15,40"/>
+      <path d="M33,55 Q21,47 15,40"/>
+    </svg>
+  </div>
+  <div class="tarrow" id="arrowRight" aria-label="turn right">
+    <svg viewBox="0 0 80 80">
+      <path d="M15,40 Q40,41 65,40"/>
+      <path d="M47,25 Q59,33 65,40"/>
+      <path d="M47,55 Q59,47 65,40"/>
+    </svg>
+  </div>
+</div>
 <div id="ui"><button class="btn" id="toggleBtn">third person</button></div>
 
 <script>
@@ -206,6 +256,15 @@ window.addEventListener('message', (e) => {
 <script src="https://cdn.babylonjs.com/loaders/babylonjs.loaders.min.js"></script>
 
 <script>
+// ─── Device ───────────────────────────────────────────────────────────────────
+// True when the game is running on a phone/tablet, so we can swap in touch
+// controls. The userAgent regex catches phones and most tablets; the
+// maxTouchPoints clause also catches iPadOS 13+, which masquerades as desktop
+// Safari (its UA says "Macintosh") but reports multiple touch points.
+const IS_MOBILE =
+  /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+  (navigator.maxTouchPoints > 1 && /Macintosh/i.test(navigator.userAgent));
+
 // ─── Tuning ───────────────────────────────────────────────────────────────────
 const PLAYER_HEIGHT  = 68;            // 75 reduced 10% — fits barn staircase clearances
 const WALK_SPEED     = 3.6;
@@ -395,6 +454,15 @@ isoCamera.angularSensibilityY = 800;
 isoCamera.inputs.attached.pointers.buttons = [0, 1, 2];
 // Two-finger drag pans the target on touch (pinch still zooms)
 isoCamera.inputs.attached.pointers.multiTouchPanning = true;
+// Touch overview tuning. Linear zoom is imperceptible across the 80–8000 radius
+// range, so pinch felt dead — use percentage-based zoom (scaled to current radius)
+// and a faster two-finger pan. multiTouchPanAndZoom lets a two-finger gesture pan
+// AND pinch-zoom at the same time (pure drag = pan, change distance = zoom).
+if (IS_MOBILE) {
+  isoCamera.pinchDeltaPercentage = 0.012;   // pinch → zoom, proportional to radius
+  isoCamera.panningSensibility   = 3;        // lower = faster two-finger pan (was 8)
+  isoCamera.inputs.attached.pointers.multiTouchPanAndZoom = true;
+}
 // Remove the camera's built-in arrow-key orbit — in overview the arrows move only the CHARACTER.
 isoCamera.inputs.removeByType('ArcRotateCameraKeyboardMoveInput');
 // Prevent iso camera from clipping through barn walls / large geometry when zoomed in.
@@ -1991,6 +2059,7 @@ function switchToTP() {
   document.getElementById('modeLabel').textContent = 'third person \u2014 arrows to move \u00b7 shift to sprint \u00b7 space to jump \u00b7 drag to look \u00b7 esc to exit';
   document.getElementById('toggleBtn').textContent = 'overview';
   applyModeVisibility();
+  setTouchControls(true);   // show mobile arrows in third person
 }
 
 function switchToIso() {
@@ -2005,7 +2074,53 @@ function switchToIso() {
   document.getElementById('modeLabel').textContent = 'overview \u2014 left-drag to rotate \u00b7 right-drag to pan \u00b7 scroll to zoom';
   document.getElementById('toggleBtn').textContent = 'third person';
   applyModeVisibility();
+  setTouchControls(false);  // hide mobile arrows in overview
 }
+
+// ─── Mobile third-person touch controls ───────────────────────────────────────
+// The arrows drive the SAME `keys` flags the keyboard uses, so all movement /
+// turn / sprint logic is reused unchanged. Jump = double-tap on the open scene.
+function setTouchControls(show) {
+  const tc = document.getElementById('touchControls');
+  if (tc) tc.style.display = (show && IS_MOBILE) ? 'block' : 'none';
+}
+
+(function setupTouchControls() {
+  if (!IS_MOBILE) return;
+  const ARROW_KEYS = { arrowUp: 'ArrowUp', arrowLeft: 'ArrowLeft', arrowRight: 'ArrowRight' };
+  Object.keys(ARROW_KEYS).forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    const code = ARROW_KEYS[id];
+    const press = (e) => {
+      e.preventDefault();
+      keys[code] = true;
+      el.classList.add('active');
+      if (e.pointerId != null && el.setPointerCapture) { try { el.setPointerCapture(e.pointerId); } catch (_) {} }
+    };
+    const release = () => { keys[code] = false; el.classList.remove('active'); };
+    el.addEventListener('pointerdown',  press);
+    el.addEventListener('pointerup',    release);
+    el.addEventListener('pointercancel', release);
+    el.addEventListener('pointerleave', release);
+  });
+
+  // Double-tap anywhere on the scene → jump (pulse Space; the existing jump-latch
+  // logic turns one pulse into a single hop).
+  let lastTap = 0, lastX = 0, lastY = 0;
+  canvas.addEventListener('pointerup', (e) => {
+    if (mode !== 'tp' || e.pointerType === 'mouse') return;
+    const dt = e.timeStamp - lastTap;
+    const moved = Math.hypot(e.clientX - lastX, e.clientY - lastY);
+    if (dt > 0 && dt < 320 && moved < 40) {
+      keys['Space'] = true;
+      setTimeout(() => { keys['Space'] = false; }, 120);
+      lastTap = 0;                       // consume so a triple-tap isn't two jumps
+    } else {
+      lastTap = e.timeStamp; lastX = e.clientX; lastY = e.clientY;
+    }
+  });
+})();
 
 // The real 3D scene (ground + prop posters) is shown in both modes; overview just views it
 // from the iso camera. The character keeps its position across the switch.
