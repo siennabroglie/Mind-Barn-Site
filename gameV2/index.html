@@ -43,7 +43,7 @@
      overview button. Forward (up) + turn left/right; jump is a double-tap on the
      scene. Hidden by default; shown only on mobile in third-person (via JS).      */
   #touchControls {
-    position: absolute; bottom: 84px; left: 50%; transform: translateX(-50%);
+    position: absolute; bottom: 72px; left: 50%; transform: translateX(-50%);
     width: 240px; height: 124px; z-index: 11;
     pointer-events: none;          /* container ignores taps; arrows re-enable */
     display: none;
@@ -212,23 +212,17 @@
 <div id="touchControls">
   <div class="tarrow" id="arrowUp" aria-label="forward">
     <svg viewBox="0 0 80 80">
-      <path d="M40,66 Q41,40 40,15"/>
-      <path d="M25,33 Q33,21 40,15"/>
-      <path d="M55,33 Q47,21 40,15"/>
+      <path d="M40,68 Q41,42 40,17 M24,33 Q33,22 40,17 Q47,22 56,33"/>
     </svg>
   </div>
   <div class="tarrow" id="arrowLeft" aria-label="turn left">
     <svg viewBox="0 0 80 80">
-      <path d="M65,40 Q40,41 15,40"/>
-      <path d="M33,25 Q21,33 15,40"/>
-      <path d="M33,55 Q21,47 15,40"/>
+      <path d="M68,40 Q42,41 17,40 M33,24 Q22,33 17,40 Q22,47 33,56"/>
     </svg>
   </div>
   <div class="tarrow" id="arrowRight" aria-label="turn right">
     <svg viewBox="0 0 80 80">
-      <path d="M15,40 Q40,41 65,40"/>
-      <path d="M47,25 Q59,33 65,40"/>
-      <path d="M47,55 Q59,47 65,40"/>
+      <path d="M12,40 Q38,41 63,40 M47,24 Q58,33 63,40 Q58,47 47,56"/>
     </svg>
   </div>
 </div>
@@ -2082,11 +2076,10 @@ function switchToIso() {
 // turn / sprint logic is reused unchanged. Jump = double-tap on the open scene.
 function setTouchControls(show) {
   const tc = document.getElementById('touchControls');
-  if (tc) tc.style.display = (show && IS_MOBILE) ? 'block' : 'none';
+  if (tc) tc.style.display = show ? 'block' : 'none';
 }
 
 (function setupTouchControls() {
-  if (!IS_MOBILE) return;
   const ARROW_KEYS = { arrowUp: 'ArrowUp', arrowLeft: 'ArrowLeft', arrowRight: 'ArrowRight' };
   Object.keys(ARROW_KEYS).forEach(id => {
     const el = document.getElementById(id);
