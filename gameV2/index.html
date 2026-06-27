@@ -2076,7 +2076,7 @@ function switchToIso() {
 // turn / sprint logic is reused unchanged. Jump = double-tap on the open scene.
 function setTouchControls(show) {
   const tc = document.getElementById('touchControls');
-  if (tc) tc.style.display = show ? 'block' : 'none';
+  if (tc) tc.style.display = (show && IS_MOBILE) ? 'block' : 'none';
 }
 
 (function setupTouchControls() {
