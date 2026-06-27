@@ -486,6 +486,8 @@ tpCamera.minZ = 4;
 tpCamera.maxZ = 12000;
 tpCamera.speed = WALK_SPEED;
 tpCamera.angularSpeed = 0.03;
+// Mobile turns only via the on-screen arrows — slow the turn so it isn't abrupt.
+if (IS_MOBILE) tpCamera.angularSpeed = 0.015;
 tpCamera.angle = Math.PI;   // face toward scene (set before direction)
 tpCamera.direction = new BABYLON.Vector3(Math.cos(tpCamera.angle), 0, Math.sin(tpCamera.angle));
 tpCamera.ellipsoid = new BABYLON.Vector3(12, PLAYER_HEIGHT / 2, 12);
