@@ -61,7 +61,7 @@
       position: absolute;
       left: 80px;
       font-family: 'Caveat', cursive;
-      font-size: 20px;
+      font-size: 21px;
       color: #000;
       background: rgba(255, 255, 255, 0.75);
       padding: 5px 12px;
@@ -107,7 +107,7 @@
     </div>
 
     <!-- LETTUCE -->
-    <div class="ing" id="ing-lettuce" data-closed="20" data-open="70">
+    <div class="ing" id="ing-lettuce" data-closed="20" data-open="250">
       <svg width="56" height="14" viewBox="0 0 56 14"
            fill="none" stroke="#111" stroke-width="1.8"
            stroke-linecap="round" stroke-linejoin="round">
@@ -132,7 +132,7 @@
     </div>
 
     <!-- ONION -->
-    <div class="ing" id="ing-onion" data-closed="33" data-open="190">
+    <div class="ing" id="ing-onion" data-closed="33" data-open="70">
       <svg width="56" height="14" viewBox="0 0 56 14"
            fill="none" stroke="#111" stroke-width="1.8"
            stroke-linecap="round" stroke-linejoin="round">
@@ -143,7 +143,7 @@
     </div>
 
     <!-- PATTY -->
-    <div class="ing" id="ing-patty" data-closed="40" data-open="250">
+    <div class="ing" id="ing-patty" data-closed="40" data-open="190">
       <svg width="56" height="16" viewBox="0 0 56 16"
            fill="none" stroke="#111" stroke-width="1.6"
            stroke-linecap="round" stroke-linejoin="round">
@@ -166,12 +166,11 @@
     </div>
 
     <!-- Labels — top set by JS to vertically center on open ingredient position -->
-    <a class="ing-label" id="label-bun-top"    href="YOUR_URL_HERE">Page One</a>
-    <a class="ing-label" id="label-lettuce"    href="YOUR_URL_HERE">Page Two</a>
-    <a class="ing-label" id="label-tomato"     href="YOUR_URL_HERE">Page Three</a>
-    <a class="ing-label" id="label-onion"      href="YOUR_URL_HERE">Page Four</a>
-    <a class="ing-label" id="label-patty"      href="YOUR_URL_HERE">Page Five</a>
-    <a class="ing-label" id="label-bun-bottom" href="YOUR_URL_HERE">Page Six</a>
+    <!-- Top and bottom buns intentionally have no menu label -->
+    <a class="ing-label" id="label-onion"      href="YOUR_URL_HERE">About</a>
+    <a class="ing-label" id="label-tomato"     href="YOUR_URL_HERE">Selected Works</a>
+    <a class="ing-label" id="label-patty"      href="YOUR_URL_HERE">Works in Progress</a>
+    <a class="ing-label" id="label-lettuce"    href="YOUR_URL_HERE">Manifestio</a>
 
   </div>
 </div>
@@ -182,12 +181,12 @@
   const catcher = document.getElementById('click-catcher');
 
   const layers = [
-    { ing: 'ing-bun-top',    label: 'label-bun-top',    ingH: 22 },
-    { ing: 'ing-lettuce',    label: 'label-lettuce',    ingH: 14 },
-    { ing: 'ing-tomato',     label: 'label-tomato',     ingH: 12 },
+    { ing: 'ing-bun-top',    label: null,               ingH: 22 },
     { ing: 'ing-onion',      label: 'label-onion',      ingH: 14 },
+    { ing: 'ing-tomato',     label: 'label-tomato',     ingH: 12 },
     { ing: 'ing-patty',      label: 'label-patty',      ingH: 16 },
-    { ing: 'ing-bun-bottom', label: 'label-bun-bottom', ingH: 14 },
+    { ing: 'ing-lettuce',    label: 'label-lettuce',    ingH: 14 },
+    { ing: 'ing-bun-bottom', label: null,               ingH: 14 },
   ];
 
   const PANEL_PADDING = 8;  // panel padding top
@@ -203,6 +202,7 @@
     // Set initial position
     el.style.top = l.closedTop + 'px';
     // Pre-position labels at open pos, centered on ingredient
+    if (!l.label) return;
     const labelEl = document.getElementById(l.label);
     labelEl.style.top = (l.openTop + l.ingH / 2 - 15) + 'px';
   });
@@ -234,6 +234,7 @@
 
     // Stagger labels
     layers.forEach((l, i) => {
+      if (!l.label) return;
       setTimeout(() => {
         document.getElementById(l.label).classList.add('visible');
       }, 280 + i * 65);
@@ -245,7 +246,7 @@
     catcher.classList.remove('open');
 
     // Hide labels
-    layers.forEach(l => document.getElementById(l.label).classList.remove('visible'));
+    layers.forEach(l => { if (l.label) document.getElementById(l.label).classList.remove('visible'); });
 
     // Slide ingredients back together
     layers.forEach(l => {
